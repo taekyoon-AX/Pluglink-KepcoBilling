@@ -758,7 +758,7 @@ const AdminView = {
   async actionEditNotes(id) {
     const sub = Storage.getSubmissions().find(s => s.id === id);
     if (!sub) return;
-    const newNotes = prompt('비고 메모 (취소 시 변경 안 됨):', sub.notes || '');
+    const newNotes = prompt('비고 입력:', sub.notes || '');
     if (newNotes === null) return;
     Storage.updateSubmission(id, { notes: newNotes });
     if (Sync.enabled()) await Sync.updateSubmission(id, { notes: newNotes });
@@ -1091,6 +1091,7 @@ const AdminView = {
       n: refData.n,                        // N = 참조 시트 (기본 AV)
       o: refData.o,                        // O = 참조 시트 (기본 AW)
       p: ymd,                              // P = 처리날짜
+      r: sub.notes || '',                  // R = 비고
     };
 
     const r = await Sync.appendProcessingRow(
@@ -1161,7 +1162,7 @@ const AdminView = {
     this._paymentRows = rows; // 편집 시 참조용
 
     if (rows.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="13" style="text-align:center;padding:24px;color:var(--muted);">기록된 처리 내역이 없습니다.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;padding:24px;color:var(--muted);">기록된 처리 내역이 없습니다.</td></tr>`;
       return;
     }
 
@@ -1180,6 +1181,7 @@ const AdminView = {
         <td>${this._esc(row.n)}</td>
         <td>${this._esc(row.o)}</td>
         <td>${this._esc(row.p)}</td>
+        <td title="${this._esc(row.r)}">${this._esc((row.r || '').length > 14 ? row.r.slice(0,14) + '…' : (row.r || ''))}</td>
         <td><button class="small" onclick="AdminView.openPaymentEditModal(${row.rowNumber})">수정</button></td>
       </tr>
     `).join('');
@@ -1208,6 +1210,7 @@ const AdminView = {
     document.getElementById('pe-m').value = row.m || '';
     document.getElementById('pe-n').value = row.n || '';
     document.getElementById('pe-o').value = row.o || '';
+    document.getElementById('pe-r').value = row.r || '';
 
     // 날짜: 시트에서 "YYYY-MM-DD" 형식으로 옴
     const dateStr = String(row.p || '');
@@ -1242,6 +1245,7 @@ const AdminView = {
       n: document.getElementById('pe-n').value.trim(),
       o: document.getElementById('pe-o').value.trim(),
       p: document.getElementById('pe-p').value,  // "YYYY-MM-DD"
+      r: document.getElementById('pe-r').value,  // R = 비고
     };
 
     const btn = document.getElementById('btn-payment-edit-save');

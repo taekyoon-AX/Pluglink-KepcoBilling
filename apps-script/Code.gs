@@ -91,6 +91,10 @@ function doPost(e) {
         if (auth.role !== 'admin') { result = { ok: false, error: 'admin_only' }; break; }
         result = setProcessingSheetConfig(data.sheetUrl, data.sheetGid, data.sheetName);
         break;
+      case 'update_processing_note':
+        // R열(비고) 수정. admin=모든 행 / contractor=A열(시공사) 본인 행만
+        result = updateProcessingNoteWithAuth(auth, data.sheetUrl, data.sheetGid, data.sheetName, data.rowNumber, data.note);
+        break;
       case 'update_processing_row':
         // 처리 시트 특정 행 수정 (납부 이력 탭 수정 기능)
         if (auth.role !== 'admin') { result = { ok: false, error: 'admin_only' }; break; }
@@ -836,7 +840,7 @@ function appendProcessingRow(sheetUrl, gid, sheetName, row) {
     // 컬럼 키별 매핑 (B=2, ..., P=16)
     const colMap = {
       b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10,
-      k: 11, l: 12, m: 13, n: 14, o: 15, p: 16,
+      k: 11, l: 12, m: 13, n: 14, o: 15, p: 16, q: 17, r: 18,
     };
 
     // P열(날짜)은 Date 객체로 변환해 셀에 날짜 서식이 정상 적용되도록 함
@@ -926,7 +930,7 @@ function readProcessingRows(sheetUrl, gid, sheetName) {
     const lastRow = sheet.getLastRow();
     if (lastRow < 1) return { ok: true, rows: [], sheet: sheet.getName() };
 
-    const maxCol = 17; // Q=17 (완료확인 체크박스)
+    const maxCol = 18; // Q=17 (완료확인), R=18 (비고)
     const data = sheet.getRange(1, 1, lastRow, maxCol).getValues();
 
     const fmtDate = (v) => {
@@ -965,6 +969,7 @@ function readProcessingRows(sheetUrl, gid, sheetName) {
         o: String(rowArr[14] || ''),
         p: fmtDate(rowArr[15]),
         q: qChecked, // Q열: 완료확인 체크박스
+        r: String(rowArr[17] || ''), // R열: 비고
       });
     }
     return { ok: true, rows: rows, sheet: sheet.getName(), total: rows.length };
@@ -1008,6 +1013,51 @@ function updateQStatus(sheetUrl, gid, sheetName, rowNumbers, value) {
   }
 }
 
+// ============ 납부내역 시트 R열(비고) 수정 — admin/contractor 양방향 ============
+/**
+ * admin: 모든 행 / contractor: A열(시공사)이 본인 이름과 매칭되는 행만
+ * sheetUrl 미전달 시 서버 저장 설정 사용.
+ */
+function updateProcessingNoteWithAuth(auth, sheetUrl, gid, sheetName, rowNumber, note) {
+  try {
+    var n = Number(rowNumber);
+    if (!n || n < 1) return { ok: false, error: 'rowNumber 필요' };
+
+    var url = sheetUrl, g = gid, name = sheetName;
+    if (!url) {
+      var stored = _getStoredProcessingConfig();
+      if (stored) { url = stored.url; g = stored.gid; name = stored.name; }
+    }
+    if (!url) return { ok: false, error: '처리 시트가 설정되지 않았습니다.' };
+
+    var id = extractSheetId(url);
+    var ss = SpreadsheetApp.openById(id);
+    var sheet;
+    if (name) sheet = ss.getSheetByName(name);
+    if (!sheet && g) sheet = ss.getSheets().filter(function (s) { return String(s.getSheetId()) === String(g); })[0];
+    if (!sheet) return { ok: false, error: '시트를 찾을 수 없음' };
+    if (n > sheet.getLastRow()) return { ok: false, error: '행 번호가 범위를 벗어남' };
+
+    // contractor 는 A열(시공사) 본인 행만 수정 가능
+    if (auth && auth.role === 'contractor') {
+      var aVal = String(sheet.getRange(n, 1).getValue() || ''); // A열
+      var nrm = function (s) { return String(s || '').replace(/\s+/g, '').toLowerCase(); };
+      var target = nrm(auth.name || auth.id || '');
+      var a = nrm(aVal);
+      var tokens = a.split(/[,/·|]/).map(function (t) { return t.trim(); }).filter(Boolean);
+      var matched = (tokens.length > 1)
+        ? tokens.some(function (t) { return t === target || t.indexOf(target) >= 0 || target.indexOf(t) >= 0; })
+        : (a === target || a.indexOf(target) >= 0 || target.indexOf(a) >= 0);
+      if (!matched) return { ok: false, error: 'forbidden_not_owner' };
+    }
+
+    sheet.getRange(n, 18).setValue(note == null ? '' : String(note)); // R열 = 18
+    return { ok: true, rowNumber: n };
+  } catch (err) {
+    return { ok: false, error: err.toString() };
+  }
+}
+
 // ============ 처리 시트 특정 행 수정 (납부 이력 탭) ============
 /**
  * rowNumber: 1-based 행 번호
@@ -1027,7 +1077,7 @@ function updateProcessingRow(sheetUrl, gid, sheetName, rowNumber, row) {
 
     const colMap = {
       b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10,
-      k: 11, l: 12, m: 13, n: 14, o: 15, p: 16,
+      k: 11, l: 12, m: 13, n: 14, o: 15, p: 16, q: 17, r: 18,
     };
 
     const parseDateCol = (k, v) => {

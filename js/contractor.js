@@ -621,13 +621,17 @@ const ContractorView = {
     const filtered = rows.filter(row => !fStatus || statusOf(row) === fStatus);
 
     if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--muted);">납부 이력이 없습니다.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--muted);">납부 이력이 없습니다.</td></tr>`;
       return;
     }
 
     tbody.innerHTML = filtered.map(row => {
       const status = statusOf(row);
       const feeNum = row.g ? Number(String(row.g).replace(/[^0-9.-]/g, '')) : 0;
+      const noteText = row.r || '';
+      const noteDisplay = noteText
+        ? (noteText.length > 14 ? this._esc(noteText.slice(0, 14)) + '…' : this._esc(noteText))
+        : '✏️ 추가';
       return `
         <tr>
           <td><code>${this._esc(row.b)}</code></td>
@@ -639,9 +643,27 @@ const ContractorView = {
           <td>${this._esc(Utils.formatAccountNumber(row.l))}</td>
           <td>${this._esc(row.p)}</td>
           <td><span class="status-pill status-${status}">${status}</span></td>
+          <td title="${this._esc(noteText)}" style="cursor:pointer;color:${noteText ? 'var(--primary)' : 'var(--muted)'}"
+              onclick="ContractorView.editNote(${row.rowNumber})">${noteDisplay}</td>
         </tr>
       `;
     }).join('');
+  },
+
+  /** 납부내역 시트 R열(비고) 수정 — 시공사 본인 행만 (서버 검증) */
+  async editNote(rowNumber) {
+    const rows = this._paymentHistoryRows || [];
+    const row = rows.find(r => r.rowNumber === rowNumber);
+    if (!row) return;
+    const newNote = prompt('비고 입력:', row.r || '');
+    if (newNote === null) return; // 취소
+    const r = await Sync.updateProcessingNote(rowNumber, newNote);
+    if (!r.ok) {
+      alert('비고 저장 실패: ' + (r.error || ''));
+      return;
+    }
+    row.r = newNote; // 로컬 캐시 갱신
+    this.renderHistory();
   },
 
   shortNote(notes) {

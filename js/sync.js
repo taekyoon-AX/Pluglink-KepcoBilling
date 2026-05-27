@@ -117,6 +117,11 @@ const Sync = {
     return this.call('set_processing_sheet_config', { sheetUrl, sheetGid, sheetName });
   },
 
+  /** R열(비고) 수정 — admin/contractor 양방향. 시공사는 본인 행만 (서버 검증) */
+  async updateProcessingNote(rowNumber, note, sheetUrl, sheetGid, sheetName) {
+    return this.call('update_processing_note', { rowNumber, note, sheetUrl: sheetUrl || '', sheetGid: sheetGid || '', sheetName: sheetName || '' });
+  },
+
   /** TEST 시트의 특정 행 수정 */
   async updateProcessingRow(sheetUrl, sheetGid, sheetName, rowNumber, row) {
     return this.call('update_processing_row', { sheetUrl, sheetGid, sheetName, rowNumber, row });

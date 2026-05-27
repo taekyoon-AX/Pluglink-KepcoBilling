@@ -202,6 +202,7 @@
               <th>N열</th>
               <th>O열</th>
               <th>처리날짜</th>
+              <th>비고</th>
               <th style="width:52px">수정</th>
             </tr>
           </thead>
@@ -220,7 +221,7 @@
         <div class="modal-body">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
             <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">프로젝트ID
-              <input id="pe-b" type="text" style="background:var(--surface-alt);cursor:default" readonly />
+              <input id="pe-b" type="text" />
             </label>
             <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">처리날짜
               <input id="pe-p" type="date" />
@@ -251,6 +252,9 @@
             </label>
             <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">O열
               <input id="pe-o" type="text" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;grid-column:span 2">비고 (R열)
+              <textarea id="pe-r" rows="2" style="resize:vertical"></textarea>
             </label>
           </div>
         </div>
@@ -546,6 +550,7 @@
             <th>계좌번호</th>
             <th>처리일</th>
             <th>상태</th>
+            <th>비고</th>
           </tr>
         </thead>
         <tbody id="contractor-tbody"></tbody>

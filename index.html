@@ -365,6 +365,46 @@
         </div>
 
         <div class="card" style="grid-column: 1 / -1;">
+          <h3>📐 M·N·O열 참조 시트 (AU/AV/AW 출처)</h3>
+          <p class="muted" style="margin-bottom:10px">
+            납부내역 시트의 <code>M·N·O</code>열에 채울 값을 가져오는 별도 시트 (예: <code>PM_25년환경부입찰</code>).
+            <code>프로젝트ID</code> 컬럼으로 매칭하여 아래 지정한 컬럼 값을 가져옵니다. 비워두면 위 중앙 시트를 사용합니다.
+          </p>
+          <div style="display:grid;grid-template-columns:1fr 160px 200px;gap:8px;">
+            <label>
+              <span>시트 URL</span>
+              <input type="text" id="cfg-billingref-url" placeholder="https://docs.google.com/spreadsheets/d/.../edit?gid=..." />
+            </label>
+            <label>
+              <span>GID (자동추출)</span>
+              <input type="text" id="cfg-billingref-gid" placeholder="(자동)" />
+            </label>
+            <label>
+              <span>시트(탭)명</span>
+              <input type="text" id="cfg-billingref-name" placeholder="PM_25년환경부입찰" />
+            </label>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;">
+            <label>
+              <span>M열 ← 컬럼</span>
+              <input type="text" id="cfg-billingref-col-m" placeholder="AU" />
+            </label>
+            <label>
+              <span>N열 ← 컬럼</span>
+              <input type="text" id="cfg-billingref-col-n" placeholder="AV" />
+            </label>
+            <label>
+              <span>O열 ← 컬럼</span>
+              <input type="text" id="cfg-billingref-col-o" placeholder="AW" />
+            </label>
+          </div>
+          <div style="margin-top:8px;">
+            <button id="btn-billingref-test">🔌 참조 시트 테스트</button>
+            <span id="billingref-test-status" class="muted"></span>
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
           <h3>📝 처리 결과 기록 시트 (납부 이력)</h3>
           <p class="muted" style="margin-bottom:10px">
             처리완료 시 자동으로 행이 추가되는 시트. 납부 이력 탭에서도 이 시트를 읽어옵니다.

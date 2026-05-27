@@ -40,6 +40,8 @@ const AdminView = {
     document.getElementById('btn-sync-pull').onclick = () => this.syncPull();
     document.getElementById('btn-sync-push-all').onclick = () => this.syncPushAll();
     document.getElementById('btn-central-test').onclick = () => this.centralSheetTest();
+    const billingRefTestBtn = document.getElementById('btn-billingref-test');
+    if (billingRefTestBtn) billingRefTestBtn.onclick = () => this.billingRefTest();
     document.getElementById('btn-folder-test').onclick = () => this.folderAccessTest();
     document.getElementById('btn-select-local-folder').onclick = () => this.selectLocalFolder();
     document.getElementById('btn-clear-local-folder').onclick = () => this.clearLocalFolder();
@@ -974,6 +976,39 @@ const AdminView = {
   },
 
   /**
+   * M·N·O열 참조 시트(예: PM_25년환경부입찰)에서 프로젝트ID 매칭 행의 지정 컬럼 조회
+   * 참조 시트 미설정 시 중앙 시트(centralProjectSheet)로 폴백.
+   * 반환: { m, n, o } 문자열 값
+   */
+  async _lookupBillingRef(projectId) {
+    const empty = { m: '', n: '', o: '' };
+    if (!Sync.enabled()) return empty;
+    const cfg = Storage.getConfig();
+
+    // 참조 시트 우선, 없으면 중앙 시트로 폴백
+    const useRef = !!cfg.billingRefSheetUrl;
+    const url  = useRef ? cfg.billingRefSheetUrl  : cfg.centralProjectSheetUrl;
+    const gid  = useRef ? cfg.billingRefSheetGid  : cfg.centralProjectSheetGid;
+    const name = useRef ? cfg.billingRefSheetName : cfg.centralProjectSheetName;
+    if (!url) return empty;
+
+    const colM = (cfg.billingRefColM || 'AU').toUpperCase();
+    const colN = (cfg.billingRefColN || 'AV').toUpperCase();
+    const colO = (cfg.billingRefColO || 'AW').toUpperCase();
+
+    const r = await Sync.lookupCentralColumns(url, gid, name, [projectId], [colM, colN, colO]);
+    if (r.ok && r.map && r.map[projectId]) {
+      const hit = r.map[projectId];
+      return {
+        m: hit[colM] ?? '',
+        n: hit[colN] ?? '',
+        o: hit[colO] ?? '',
+      };
+    }
+    return empty;
+  },
+
+  /**
    * 처리 시트(외부 Google Sheet)에 신규 행 추가 (B열 마지막 행 기준)
    * B=프로젝트ID, E=현장명, F=용량, G=표준시설부담금,
    * J=고객번호, K=은행, L=고객지정계좌, P=처리날짜
@@ -1014,22 +1049,9 @@ const AdminView = {
     // F열 용량: 값이 있으면 뒤에 ' kW' 단위 추가
     const capacityVal = sub.capacity ? `${sub.capacity} kW` : '';
 
-    // 중앙 시트에서 AU, AV, AW 컬럼 조회 → 처리 시트 M, N, O열에 입력
-    let centralAU = '', centralAV = '', centralAW = '';
-    if (Sync.enabled() && cfg.centralProjectSheetUrl) {
-      const r = await Sync.lookupCentralColumns(
-        cfg.centralProjectSheetUrl,
-        cfg.centralProjectSheetGid,
-        cfg.centralProjectSheetName,
-        [sub.projectId],
-        ['AU', 'AV', 'AW'],
-      );
-      if (r.ok && r.map && r.map[sub.projectId]) {
-        centralAU = r.map[sub.projectId].AU ?? '';
-        centralAV = r.map[sub.projectId].AV ?? '';
-        centralAW = r.map[sub.projectId].AW ?? '';
-      }
-    }
+    // M·N·O열 값 조회 → 전용 참조 시트(PM_25년환경부입찰)에서 지정 컬럼 가져옴
+    // 참조 시트 미설정 시 중앙 시트로 폴백
+    const refData = await this._lookupBillingRef(sub.projectId);
 
     const row = {
       b: sub.projectId,                    // B = 프로젝트ID (거점 suffix 없이)
@@ -1040,9 +1062,9 @@ const AdminView = {
       j: sub.customerNumber || '',         // J = 고객번호
       k: sub.customerBank || '',           // K = 은행
       l: sub.customerAccount || '',        // L = 고객지정계좌
-      m: centralAU,                        // M = 중앙시트 AU열 값
-      n: centralAV,                        // N = 중앙시트 AV열 값
-      o: centralAW,                        // O = 중앙시트 AW열 값
+      m: refData.m,                        // M = 참조 시트 (기본 AU)
+      n: refData.n,                        // N = 참조 시트 (기본 AV)
+      o: refData.o,                        // O = 참조 시트 (기본 AW)
       p: ymd,                              // P = 처리날짜
     };
 
@@ -1268,6 +1290,14 @@ const AdminView = {
     document.getElementById('cfg-central-gid').value = cfg.centralProjectSheetGid || '';
     document.getElementById('cfg-central-name').value = cfg.centralProjectSheetName || '';
 
+    // M·N·O 참조 시트 (AU/AV/AW 출처)
+    document.getElementById('cfg-billingref-url').value = cfg.billingRefSheetUrl || '';
+    document.getElementById('cfg-billingref-gid').value = cfg.billingRefSheetGid || '';
+    document.getElementById('cfg-billingref-name').value = cfg.billingRefSheetName || '';
+    document.getElementById('cfg-billingref-col-m').value = cfg.billingRefColM || 'AU';
+    document.getElementById('cfg-billingref-col-n').value = cfg.billingRefColN || 'AV';
+    document.getElementById('cfg-billingref-col-o').value = cfg.billingRefColO || 'AW';
+
     // 처리 결과 기록 시트
     document.getElementById('cfg-processing-url').value = cfg.processingSheetUrl || '';
     document.getElementById('cfg-processing-gid').value = cfg.processingSheetGid || '';
@@ -1333,6 +1363,20 @@ const AdminView = {
     }
     cfg.centralProjectSheetGid = centralGid;
     cfg.centralProjectSheetName = document.getElementById('cfg-central-name').value.trim();
+
+    // M·N·O 참조 시트 저장 (AU/AV/AW 출처)
+    const billingRefUrl = document.getElementById('cfg-billingref-url').value.trim();
+    cfg.billingRefSheetUrl = billingRefUrl;
+    let billingRefGid = document.getElementById('cfg-billingref-gid').value.trim();
+    if (!billingRefGid && billingRefUrl) {
+      const m = billingRefUrl.match(/[#&?]gid=(\d+)/);
+      billingRefGid = m ? m[1] : '';
+    }
+    cfg.billingRefSheetGid = billingRefGid;
+    cfg.billingRefSheetName = document.getElementById('cfg-billingref-name').value.trim();
+    cfg.billingRefColM = (document.getElementById('cfg-billingref-col-m').value.trim() || 'AU').toUpperCase();
+    cfg.billingRefColN = (document.getElementById('cfg-billingref-col-n').value.trim() || 'AV').toUpperCase();
+    cfg.billingRefColO = (document.getElementById('cfg-billingref-col-o').value.trim() || 'AW').toUpperCase();
 
     // 처리 결과 기록 시트 저장
     const processingUrl = document.getElementById('cfg-processing-url').value.trim();
@@ -1846,6 +1890,39 @@ const AdminView = {
     status.innerHTML = '<br>' + results.map(r => '• ' + r).join('<br>');
   },
 
+  /** M·N·O 참조 시트 테스트 — 처리예정 첫 건의 프로젝트ID로 AU/AV/AW 조회 결과 표시 */
+  async billingRefTest() {
+    const status = document.getElementById('billingref-test-status');
+    const url = document.getElementById('cfg-billingref-url').value.trim();
+    if (!url) { status.textContent = 'URL을 입력하세요 (비우면 중앙 시트 사용).'; return; }
+    if (!Sync.enabled()) { status.innerHTML = '<span style="color:var(--danger)">Apps Script URL을 먼저 설정·저장하세요.</span>'; return; }
+
+    let gid = document.getElementById('cfg-billingref-gid').value.trim();
+    if (!gid && url) { const m = url.match(/[#&?]gid=(\d+)/); gid = m ? m[1] : ''; }
+    const name = document.getElementById('cfg-billingref-name').value.trim();
+    const colM = (document.getElementById('cfg-billingref-col-m').value.trim() || 'AU').toUpperCase();
+    const colN = (document.getElementById('cfg-billingref-col-n').value.trim() || 'AV').toUpperCase();
+    const colO = (document.getElementById('cfg-billingref-col-o').value.trim() || 'AW').toUpperCase();
+
+    // 샘플 프로젝트ID: 처리예정 첫 건
+    const sample = Storage.getSubmissions().find(s => this.getEffectiveStatus(s) === '처리예정')
+      || Storage.getSubmissions()[0];
+    if (!sample) { status.textContent = '테스트할 제출 데이터가 없습니다.'; return; }
+
+    status.textContent = `⏳ "${sample.projectId}" 조회 중...`;
+    const r = await Sync.lookupCentralColumns(url, gid, name, [sample.projectId], [colM, colN, colO]);
+    if (!r.ok) {
+      status.innerHTML = `<span style="color:var(--danger)">✗ 실패: ${r.error}</span>`;
+      return;
+    }
+    const hit = r.map && r.map[sample.projectId];
+    if (!hit) {
+      status.innerHTML = `<span style="color:var(--warning)">⚠ 프로젝트ID "${sample.projectId}" 매칭 행 없음 (${r.found || 0}/${r.requested || 1})</span>`;
+      return;
+    }
+    status.innerHTML = `<span style="color:var(--success)">✓ ${sample.projectId} → M(${colM})=${this._esc(String(hit[colM] ?? ''))} · N(${colN})=${this._esc(String(hit[colN] ?? ''))} · O(${colO})=${this._esc(String(hit[colO] ?? ''))}</span>`;
+  },
+
   async syncPushAll() {
     if (!Sync.enabled()) { alert('먼저 URL을 저장하세요.'); return; }
     if (!confirm('로컬의 모든 데이터를 클라우드에 업로드합니다. 계속하시겠습니까?')) return;
@@ -1918,19 +1995,28 @@ const AdminView = {
     const wb = XLSX.read(templateBuf, { type: 'array', cellStyles: true });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    // 2) 중앙 시트에서 AU/AV/AW 조회
-    let centralMap = {};
-    if (Sync.enabled() && cfg.centralProjectSheetUrl) {
+    // 2) M·N·O(엑셀 L·M·N) 값을 참조 시트(PM_25년환경부입찰)에서 조회
+    //    참조 시트 미설정 시 중앙 시트로 폴백
+    const colM = (cfg.billingRefColM || 'AU').toUpperCase();
+    const colN = (cfg.billingRefColN || 'AV').toUpperCase();
+    const colO = (cfg.billingRefColO || 'AW').toUpperCase();
+    const useRef = !!cfg.billingRefSheetUrl;
+    const refUrl  = useRef ? cfg.billingRefSheetUrl  : cfg.centralProjectSheetUrl;
+    const refGid  = useRef ? cfg.billingRefSheetGid  : cfg.centralProjectSheetGid;
+    const refName = useRef ? cfg.billingRefSheetName : cfg.centralProjectSheetName;
+
+    let centralMap = {}; // { projectId: { m, n, o } }
+    if (Sync.enabled() && refUrl) {
       const projectIds = [...new Set(submissions.map(s => s.projectId))];
-      const r = await Sync.lookupCentralColumns(
-        cfg.centralProjectSheetUrl,
-        cfg.centralProjectSheetGid,
-        cfg.centralProjectSheetName,
-        projectIds,
-        ['A', 'AU', 'AV', 'AW'], // A=대기번호, AU/AV/AW=요청 컬럼
-      );
-      if (r.ok) centralMap = r.map || {};
-      else console.warn('중앙 시트 lookup 실패:', r.error);
+      const r = await Sync.lookupCentralColumns(refUrl, refGid, refName, projectIds, [colM, colN, colO]);
+      if (r.ok && r.map) {
+        Object.keys(r.map).forEach(pid => {
+          const hit = r.map[pid];
+          centralMap[pid] = { m: hit[colM] ?? '', n: hit[colN] ?? '', o: hit[colO] ?? '' };
+        });
+      } else if (!r.ok) {
+        console.warn('M·N·O 참조 시트 lookup 실패:', r.error);
+      }
     }
 
     // 3) 중복 projectId 그룹화 — 거점 번호 부여
@@ -1996,12 +2082,12 @@ const AdminView = {
       set('J', s.customerBank || '', 's');
       // K: 계좌
       set('K', s.customerAccount ? Utils.formatAccountNumber(s.customerAccount) : '', 's');
-      // L: 중앙 시트 AU
-      set('L', central.AU != null ? central.AU : '', typeof central.AU === 'number' ? 'n' : 's');
-      // M: 중앙 시트 AV
-      set('M', central.AV != null ? central.AV : '', typeof central.AV === 'number' ? 'n' : 's');
-      // N: 중앙 시트 AW
-      set('N', central.AW != null ? central.AW : '', typeof central.AW === 'number' ? 'n' : 's');
+      // L: 참조 시트 M열값 (기본 AU)
+      set('L', central.m != null ? central.m : '', typeof central.m === 'number' ? 'n' : 's');
+      // M: 참조 시트 N열값 (기본 AV)
+      set('M', central.n != null ? central.n : '', typeof central.n === 'number' ? 'n' : 's');
+      // N: 참조 시트 O열값 (기본 AW)
+      set('N', central.o != null ? central.o : '', typeof central.o === 'number' ? 'n' : 's');
     });
 
     // 4) 시트 범위 확장

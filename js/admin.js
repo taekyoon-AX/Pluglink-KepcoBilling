@@ -619,6 +619,8 @@ const AdminView = {
 
   /**
    * 선택된 항목 일괄 확인완료 (납부내역 시트 기록 + 폴더 저장)
+   * - 시트 기록: 거점별로 수행
+   * - 폴더 저장: 프로젝트별 1회만 수행 (중복 파일 방지)
    */
   async actionBatchConfirm() {
     const ids = this._getCheckedIds();
@@ -629,22 +631,62 @@ const AdminView = {
     const origText = btn ? btn.textContent : '';
     if (btn) btn.disabled = true;
 
-    let success = 0, fail = 0;
+    const submissions = Storage.getSubmissions();
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+
+    let recorded = 0, recordFail = 0;
+    let folderOk = 0, folderFail = 0, filesSaved = 0, filesFailed = 0;
+
+    // 1단계: 거점별 시트 기록
     for (let i = 0; i < ids.length; i++) {
-      if (btn) btn.textContent = `⏳ ${i + 1}/${ids.length}...`;
+      if (btn) btn.textContent = `⏳ 시트 기록 ${i + 1}/${ids.length}...`;
+      const sub = submissions.find(s => s.id === ids[i]);
+      if (!sub) continue;
       try {
-        await this.actionConfirmComplete(ids[i], true);
-        success++;
+        const patch = { scheduledProcessDate: today.toISOString() };
+        Storage.updateSubmission(sub.id, patch);
+        if (Sync.enabled()) await Sync.updateSubmission(sub.id, patch);
+        await this.uploadNotesTxt(sub);
+        await this.recordToProcessingSheet(sub);
+        recorded++;
       } catch (e) {
-        fail++;
-        console.error('일괄 확인완료 오류', ids[i], e);
+        recordFail++;
+        console.error('일괄 시트 기록 오류', ids[i], e);
+      }
+    }
+
+    // 2단계: 프로젝트별 폴더 저장 (1회만)
+    const seenProjects = new Set();
+    for (let i = 0; i < ids.length; i++) {
+      const sub = submissions.find(s => s.id === ids[i]);
+      if (!sub) continue;
+      const key = `${sub.contractor}|${sub.projectId}`;
+      if (seenProjects.has(key)) continue;
+      seenProjects.add(key);
+      if (btn) btn.textContent = `⏳ 폴더 저장 ${seenProjects.size}...`;
+      try {
+        const [dr] = await Promise.all([
+          this.copyToProcessedFolder(sub),
+          this.copyToLocalFolder(sub),
+        ]);
+        if (dr && dr.ok) {
+          folderOk++;
+          const ok = (dr.results || []).filter(x => x.ok).length;
+          filesSaved += ok;
+          filesFailed += (dr.results || []).length - ok;
+        } else {
+          folderFail++;
+        }
+      } catch (e) {
+        folderFail++;
+        console.error('일괄 폴더 저장 오류', ids[i], e);
       }
     }
 
     await this.loadQStatus();
     if (btn) { btn.disabled = false; btn.textContent = origText; }
     this.renderDashboard();
-    alert(`✓ 일괄 확인완료 완료\n성공: ${success}건 / 실패: ${fail}건`);
+    alert(`✓ 일괄 확인완료\n\n시트 기록: ${recorded}건${recordFail ? ` (실패 ${recordFail})` : ''}\n폴더 생성: ${folderOk}개${folderFail ? ` (실패 ${folderFail})` : ''}\n저장된 파일: ${filesSaved}개${filesFailed ? ` (실패 ${filesFailed} — Drive 미존재/접근불가)` : ''}`);
   },
 
   /**
@@ -833,20 +875,33 @@ const AdminView = {
     if (Sync.enabled()) await Sync.updateSubmission(id, patch);
 
     const sub = Storage.getSubmissions().find(s => s.id === id);
+    let driveResult = null;
     if (sub) {
       await this.uploadNotesTxt(sub);
       await this.recordToProcessingSheet(sub);
-      await Promise.all([
+      const [dr] = await Promise.all([
         this.copyToProcessedFolder(sub),
         this.copyToLocalFolder(sub),
       ]);
+      driveResult = dr;
     }
 
     if (!silent) {
       // Q 상태 맵에 새로 추가된 행 반영
       await this.loadQStatus();
       this.renderDashboard();
+      if (driveResult && driveResult.ok) {
+        const okCount = (driveResult.results || []).filter(x => x.ok).length;
+        const failCount = (driveResult.results || []).length - okCount;
+        const failMsg = failCount > 0
+          ? `\n⚠ 저장 실패 ${failCount}개 (파일이 Drive에 없거나 접근 불가)`
+          : '';
+        alert(`✓ 확인완료 처리되었습니다.\n폴더: ${driveResult.folder}\n저장된 파일: ${okCount}개${failMsg}`);
+      } else {
+        alert('✓ 확인완료 처리되었습니다.\n(저장할 파일이 없거나 폴더 설정을 확인하세요)');
+      }
     }
+    return driveResult;
   },
 
   actionUploadTransfer(id) {
@@ -1428,8 +1483,12 @@ const AdminView = {
    * 우선순위: 로컬 FileDB → Drive 프록시 (이미지는 자동 PDF 변환)
    */
   async _fetchFileBuf(fileId, fileUrl) {
-    if (fileId) {
-      const local = await FileDB.get(fileId).catch(() => null);
+    const { driveId, driveUrl, localUuid } = this._resolveFile(fileId, fileUrl);
+
+    // 1) 로컬 IndexedDB 우선 (UUID 키)
+    const localKey = localUuid || (fileId && !driveId ? fileId : null);
+    if (localKey) {
+      const local = await FileDB.get(localKey).catch(() => null);
       if (local && local.data) {
         let buf = local.data;
         const mime = local.type || '';
@@ -1439,23 +1498,22 @@ const AdminView = {
         return buf;
       }
     }
-    if (Sync.enabled() && (fileId || fileUrl)) {
-      const proxy = await Sync.downloadDriveFile(fileId || null, fileUrl || null, true);
+
+    // 2) Drive 프록시 (Drive ID 또는 URL)
+    if (Sync.enabled() && (driveId || driveUrl)) {
+      const proxy = await Sync.downloadDriveFile(driveId || null, driveUrl || null, true);
       if (proxy.ok) return proxy.arrayBuffer;
     }
     return null;
   },
 
   /**
-   * Drive 파일 ID 추출 (로컬 fileId 우선, 없으면 URL에서 파싱)
+   * Drive 파일 ID 추출 — _resolveFile 사용 (UUID는 Drive ID로 취급하지 않음)
+   * fileId/fileUrl 필드가 뒤섞여 저장된 경우도 정상 처리
    */
   _driveIdFrom(fileId, fileUrl) {
-    if (fileId && /^[a-zA-Z0-9-_]{20,}$/.test(fileId)) return fileId;
-    if (fileUrl) {
-      const m = fileUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      if (m) return m[1];
-    }
-    return null;
+    const { driveId } = this._resolveFile(fileId, fileUrl);
+    return driveId;
   },
 
   // ──────────────────────────────────────────────────

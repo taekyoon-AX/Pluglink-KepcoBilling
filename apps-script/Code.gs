@@ -83,9 +83,13 @@ function doPost(e) {
         result = appendProcessingRow(data.sheetUrl, data.sheetGid, data.sheetName, data.row);
         break;
       case 'read_processing_rows':
-        // 처리 시트 전체 행 읽기 (납부 이력 탭)
+        // 처리 시트 행 읽기. admin=전체 / contractor=A열(시공사) 본인 것만
+        result = readProcessingRowsWithAuth(auth, data.sheetUrl, data.sheetGid, data.sheetName);
+        break;
+      case 'set_processing_sheet_config':
+        // 처리 시트 설정을 서버에 저장 (시공사도 URL 없이 조회 가능하도록)
         if (auth.role !== 'admin') { result = { ok: false, error: 'admin_only' }; break; }
-        result = readProcessingRows(data.sheetUrl, data.sheetGid, data.sheetName);
+        result = setProcessingSheetConfig(data.sheetUrl, data.sheetGid, data.sheetName);
         break;
       case 'update_processing_row':
         // 처리 시트 특정 행 수정 (납부 이력 탭 수정 기능)
@@ -855,6 +859,54 @@ function appendProcessingRow(sheetUrl, gid, sheetName, row) {
   } catch (err) {
     return { ok: false, error: err.toString() };
   }
+}
+
+// ============ 처리 시트 설정 저장/조회 (시공사 조회용) ============
+function setProcessingSheetConfig(url, gid, name) {
+  PropertiesService.getScriptProperties().setProperty(
+    'PROCESSING_SHEET_CONFIG',
+    JSON.stringify({ url: url || '', gid: gid || '', name: name || '' })
+  );
+  return { ok: true };
+}
+
+function _getStoredProcessingConfig() {
+  var raw = PropertiesService.getScriptProperties().getProperty('PROCESSING_SHEET_CONFIG');
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }
+}
+
+// ============ 권한별 처리 시트 행 읽기 ============
+/**
+ * admin: 전체 행 / contractor: A열(시공사)이 본인 이름과 매칭되는 행만
+ * sheetUrl 미전달 시(주로 contractor) 서버 저장 설정 사용.
+ */
+function readProcessingRowsWithAuth(auth, sheetUrl, gid, sheetName) {
+  var url = sheetUrl, g = gid, name = sheetName;
+  if (!url) {
+    var stored = _getStoredProcessingConfig();
+    if (stored) { url = stored.url; g = stored.gid; name = stored.name; }
+  }
+  if (!url) return { ok: false, error: '처리 시트가 설정되지 않았습니다.' };
+
+  var result = readProcessingRows(url, g, name);
+  if (result.ok && auth && auth.role === 'contractor') {
+    var myName = String(auth.name || auth.id || '');
+    var nrm = function (s) { return String(s || '').replace(/\s+/g, '').toLowerCase(); };
+    var target = nrm(myName);
+    result.rows = (result.rows || []).filter(function (r) {
+      var a = nrm(r.a);
+      if (!a || !target) return false;
+      // A열 값이 콤마/슬래시 등으로 여러 시공사면 토큰 분리 매칭
+      var tokens = a.split(/[,/·|]/).map(function (t) { return t.trim(); }).filter(Boolean);
+      if (tokens.length > 1) {
+        return tokens.some(function (t) { return t === target || t.indexOf(target) >= 0 || target.indexOf(t) >= 0; });
+      }
+      return a === target || a.indexOf(target) >= 0 || target.indexOf(a) >= 0;
+    });
+    result.total = result.rows.length;
+  }
+  return result;
 }
 
 // ============ 처리 시트 전체 행 읽기 (납부 이력 탭) ============

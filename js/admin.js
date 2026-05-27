@@ -637,7 +637,9 @@ const AdminView = {
     const today = new Date(); today.setHours(0, 0, 0, 0);
 
     let recorded = 0, recordFail = 0;
-    let folderOk = 0, folderFail = 0, filesSaved = 0, filesFailed = 0;
+    let projectCount = 0;
+    let driveSaved = 0, driveFailed = 0, localSaved = 0;
+    let driveConfigured = false, localConfigured = false;
 
     // 1단계: 거점별 시트 기록
     for (let i = 0; i < ids.length; i++) {
@@ -665,22 +667,23 @@ const AdminView = {
       const key = `${sub.contractor}|${sub.projectId}`;
       if (seenProjects.has(key)) continue;
       seenProjects.add(key);
+      projectCount++;
       if (btn) btn.textContent = `⏳ 폴더 저장 ${seenProjects.size}...`;
       try {
-        const [dr] = await Promise.all([
+        const [dr, lr] = await Promise.all([
           this.copyToProcessedFolder(sub),
           this.copyToLocalFolder(sub),
         ]);
         if (dr && dr.ok) {
-          folderOk++;
-          const ok = (dr.results || []).filter(x => x.ok).length;
-          filesSaved += ok;
-          filesFailed += (dr.results || []).length - ok;
-        } else {
-          folderFail++;
+          driveConfigured = true;
+          driveSaved += (dr.results || []).filter(x => x.ok).length;
+          driveFailed += (dr.results || []).filter(x => !x.ok).length;
+        }
+        if (lr && lr.ok) {
+          localConfigured = true;
+          localSaved += lr.saved || 0;
         }
       } catch (e) {
-        folderFail++;
         console.error('일괄 폴더 저장 오류', ids[i], e);
       }
     }
@@ -688,7 +691,13 @@ const AdminView = {
     await this.loadQStatus();
     if (btn) { btn.disabled = false; btn.textContent = origText; }
     this.renderDashboard();
-    alert(`✓ 일괄 확인완료\n\n시트 기록: ${recorded}건${recordFail ? ` (실패 ${recordFail})` : ''}\n폴더 생성: ${folderOk}개${folderFail ? ` (실패 ${folderFail})` : ''}\n저장된 파일: ${filesSaved}개${filesFailed ? ` (실패 ${filesFailed} — Drive 미존재/접근불가)` : ''}`);
+
+    const saveLines = [];
+    if (driveConfigured) saveLines.push(`☁️ Drive 폴더: ${driveSaved}개 저장${driveFailed > 0 ? ` (실패 ${driveFailed})` : ''}`);
+    if (localConfigured) saveLines.push(`💻 PC 폴더: ${localSaved}개 저장`);
+    if (saveLines.length === 0) saveLines.push('(저장된 파일 없음 — 폴더 설정 확인)');
+
+    alert(`✓ 일괄 확인완료\n\n시트 기록: ${recorded}건${recordFail ? ` (실패 ${recordFail})` : ''}\n처리 프로젝트: ${projectCount}개\n${saveLines.join('\n')}`);
   },
 
   /**
@@ -877,33 +886,48 @@ const AdminView = {
     if (Sync.enabled()) await Sync.updateSubmission(id, patch);
 
     const sub = Storage.getSubmissions().find(s => s.id === id);
-    let driveResult = null;
+    let driveResult = null, localResult = null;
     if (sub) {
       await this.uploadNotesTxt(sub);
       await this.recordToProcessingSheet(sub);
-      const [dr] = await Promise.all([
+      const [dr, lr] = await Promise.all([
         this.copyToProcessedFolder(sub),
         this.copyToLocalFolder(sub),
       ]);
       driveResult = dr;
+      localResult = lr;
     }
 
     if (!silent) {
       // Q 상태 맵에 새로 추가된 행 반영
       await this.loadQStatus();
       this.renderDashboard();
-      if (driveResult && driveResult.ok) {
-        const okCount = (driveResult.results || []).filter(x => x.ok).length;
-        const failCount = (driveResult.results || []).length - okCount;
-        const failMsg = failCount > 0
-          ? `\n⚠ 저장 실패 ${failCount}개 (파일이 Drive에 없거나 접근 불가)`
-          : '';
-        alert(`✓ 확인완료 처리되었습니다.\n폴더: ${driveResult.folder}\n저장된 파일: ${okCount}개${failMsg}`);
-      } else {
-        alert('✓ 확인완료 처리되었습니다.\n(저장할 파일이 없거나 폴더 설정을 확인하세요)');
-      }
+      alert('✓ 확인완료 처리되었습니다.\n\n' + this._formatSaveSummary(driveResult, localResult));
     }
-    return driveResult;
+    return { driveResult, localResult };
+  },
+
+  /**
+   * Drive 저장 결과 + 로컬(PC) 저장 결과를 합쳐 사람이 읽는 요약 문자열 생성
+   */
+  _formatSaveSummary(driveResult, localResult) {
+    const lines = [];
+    // Drive 폴더 결과
+    if (driveResult && driveResult.ok) {
+      const okCount = (driveResult.results || []).filter(x => x.ok).length;
+      const failCount = (driveResult.results || []).length - okCount;
+      lines.push(`☁️ Drive 폴더: ${okCount}개 저장${failCount > 0 ? ` (실패 ${failCount})` : ''}`);
+    } else if (driveResult === null) {
+      // Drive 미설정 — 메시지 생략
+    }
+    // 로컬(PC) 폴더 결과
+    if (localResult && localResult.ok) {
+      lines.push(`💻 PC 폴더: ${localResult.saved}개 저장`);
+    }
+    if (lines.length === 0) {
+      return '(저장된 파일 없음 — Drive 처리완료 폴더 또는 PC 로컬 폴더를 설정하세요)';
+    }
+    return lines.join('\n');
   },
 
   actionUploadTransfer(id) {
@@ -1042,8 +1066,9 @@ const AdminView = {
     // 현장명: "25년환경부_" + 차수 제거
     const { name: cleanName } = Utils.parseProjectName(sub.projectName || '');
 
-    const today = new Date();
-    const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    // P열(처리날짜) = 해당 주의 처리예정일(목요일). 금일이 아니라 처리요일로 기록.
+    const processDate = Utils.getCurrentProcessDate(cfg);
+    const ymd = Utils.toYMD(processDate);
     const baseFee = Number(sub.baseFee) || 0;
 
     // F열 용량: 값이 있으면 뒤에 ' kW' 단위 추가
@@ -1388,6 +1413,11 @@ const AdminView = {
     }
     cfg.processingSheetGid = processingGid;
     cfg.processingSheetName = document.getElementById('cfg-processing-name').value.trim();
+    // 처리 시트 설정을 서버에도 저장 → 시공사가 URL 없이 본인 납부이력 조회 가능
+    if (Sync.enabled() && processingUrl) {
+      Sync.setProcessingSheetConfig(processingUrl, processingGid, cfg.processingSheetName)
+        .catch(e => console.warn('처리 시트 설정 서버 저장 실패:', e));
+    }
 
     // 처리완료 폴더 저장
     const folderInput = document.getElementById('cfg-processed-folder').value.trim();
@@ -1631,7 +1661,7 @@ const AdminView = {
    */
   async copyToLocalFolder(sub) {
     const folderHandle = await this.getLocalFolderHandle();
-    if (!folderHandle) return;
+    if (!folderHandle) return null;
 
     const cfg = Storage.getConfig();
     const submissions = Storage.getSubmissions();
@@ -1653,7 +1683,7 @@ const AdminView = {
       projHandle = await folderHandle.getDirectoryHandle(folderName, { create: true });
     } catch (e) {
       console.warn('로컬 폴더 생성 실패:', e);
-      return;
+      return { ok: false, saved: 0, folderName };
     }
 
     // 파일 쓰기 헬퍼
@@ -1726,6 +1756,7 @@ const AdminView = {
     }
 
     if (saved > 0) console.log(`✓ 로컬 저장: ${saved}개 → ${folderHandle.name}/${folderName}`);
+    return { ok: true, saved, folderName };
   },
 
   /**

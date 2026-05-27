@@ -27,6 +27,8 @@ const ContractorView = {
     document.getElementById('excel-import-input').onchange = (e) => this.importExcel(e.target.files[0]);
     document.getElementById('btn-download-template').onclick = () => this.downloadTemplate();
     document.getElementById('history-filter-status').onchange = () => this.renderHistory();
+    const refreshHistBtn = document.getElementById('btn-refresh-history');
+    if (refreshHistBtn) refreshHistBtn.onclick = () => this.loadPaymentHistory();
 
     this.projectBlockCount = 0;
     this.locRowCount = 0;
@@ -34,7 +36,7 @@ const ContractorView = {
     document.getElementById('submit-rows').innerHTML = '';
 
     this.renderDeadlineInfo();
-    this.renderHistory();
+    this.loadPaymentHistory();
 
     // 시공사 프로젝트 시트 로드
     await this.loadContractorProjects();
@@ -94,7 +96,7 @@ const ContractorView = {
     document.querySelectorAll('#view-contractor .panel').forEach(p => {
       p.classList.toggle('active', p.id === `panel-${tab}`);
     });
-    if (tab === 'history') this.renderHistory();
+    if (tab === 'history') this.loadPaymentHistory();
   },
 
   renderDeadlineInfo() {
@@ -459,7 +461,7 @@ const ContractorView = {
     this.pendingFiles = {};
     document.getElementById('submit-rows').innerHTML = '';
     this.addProjectBlock();
-    this.renderHistory();
+    this.loadPaymentHistory();
   },
 
   // ================== Excel 일괄 업로드 ==================
@@ -580,84 +582,62 @@ const ContractorView = {
   },
 
   // ================== 이력 ==================
+  _esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  },
+
+  /**
+   * 납부내역 시트에서 본인 시공사(A열) 행을 서버에서 필터링하여 로드
+   * (서버 저장 설정을 사용하므로 URL 미전달)
+   */
+  async loadPaymentHistory() {
+    const statusEl = document.getElementById('history-status');
+    if (!Sync.enabled()) {
+      this._paymentHistoryRows = [];
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--warning)">⚠ 서버 연결이 설정되지 않아 납부 이력을 불러올 수 없습니다.</span>';
+      this.renderHistory();
+      return;
+    }
+    if (statusEl) statusEl.innerHTML = '⏳ 납부 이력 로드 중...';
+    const r = await Sync.readProcessingRows('', '', ''); // 서버 저장 설정 + A열 본인 필터
+    if (!r.ok) {
+      this._paymentHistoryRows = [];
+      if (statusEl) statusEl.innerHTML = `<span style="color:var(--danger)">✗ 로드 실패: ${this._esc(r.error || '')}</span>`;
+      this.renderHistory();
+      return;
+    }
+    // 최신(시트 하단) 행이 위로
+    this._paymentHistoryRows = [...(r.rows || [])].reverse();
+    if (statusEl) statusEl.innerHTML = `<span style="color:var(--success)">✓ ${this._paymentHistoryRows.length}건 로드 완료</span>`;
+    this.renderHistory();
+  },
+
   renderHistory() {
-    const auth = Auth.current();
-    const subs = Storage.getSubmissions(auth.id);
+    const rows = this._paymentHistoryRows || [];
     const fStatus = document.getElementById('history-filter-status').value;
-
-    const filtered = subs.filter(s => {
-      if (fStatus && Utils.calcStatus(s) !== fStatus) return false;
-      return true;
-    });
-
-    const rows = [...filtered].sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
     const tbody = document.getElementById('contractor-tbody');
 
-    if (rows.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="17" style="text-align:center;padding:40px;color:var(--muted);">제출 이력이 없습니다.</td></tr>`;
+    const statusOf = (row) => row.q ? '처리완료' : '처리예정';
+    const filtered = rows.filter(row => !fStatus || statusOf(row) === fStatus);
+
+    if (filtered.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--muted);">납부 이력이 없습니다.</td></tr>`;
       return;
     }
 
-    // 같은 projectId 그룹화 (접수증 공유 fallback)
-    const groupMap = {};
-    rows.forEach(s => {
-      if (!groupMap[s.projectId]) groupMap[s.projectId] = { items: [], sharedAppReceipt: null };
-      groupMap[s.projectId].items.push(s);
-      if (!groupMap[s.projectId].sharedAppReceipt && s.files && (s.files.applicationReceipt || s.files.applicationReceiptUrl)) {
-        groupMap[s.projectId].sharedAppReceipt = {
-          applicationReceipt: s.files.applicationReceipt,
-          applicationReceiptUrl: s.files.applicationReceiptUrl,
-        };
-      }
-    });
-
-    tbody.innerHTML = rows.map(s => {
-      const status = Utils.calcStatus(s);
-
-      // 프로젝트명 일관 표시
-      const parsed = Utils.parseProjectName(s.projectName || '');
-      const displayName = parsed.round
-        ? `${parsed.name}_${parsed.round}차`
-        : (parsed.name || s.projectName || '-');
-
-      // 거점 그룹
-      const group = groupMap[s.projectId];
-      const groupSize = group.items.length;
-      const myIdx = group.items.indexOf(s) + 1;
-      const groupBadge = groupSize > 1
-        ? ` <span class="loc-badge" title="${groupSize}개 거점 중 ${myIdx}번째">${myIdx}/${groupSize}</span>`
-        : '';
-
-      // 접수증 공유 fallback
-      const myHasAppRcpt = s.files && (s.files.applicationReceipt || s.files.applicationReceiptUrl);
-      let appRcptCell;
-      if (myHasAppRcpt) {
-        appRcptCell = this.fileCell(s, 'applicationReceipt');
-      } else if (group.sharedAppReceipt && groupSize > 1) {
-        const fakeFile = { files: group.sharedAppReceipt };
-        appRcptCell = this.fileCell(fakeFile, 'applicationReceipt') + ' <span class="muted" style="font-size:10px">(공유)</span>';
-      } else {
-        appRcptCell = '<span class="file-missing">없음</span>';
-      }
-
+    tbody.innerHTML = filtered.map(row => {
+      const status = statusOf(row);
+      const feeNum = row.g ? Number(String(row.g).replace(/[^0-9.-]/g, '')) : 0;
       return `
         <tr>
-          <td>${Utils.toYMD(new Date(s.submittedAt))}</td>
-          <td>${s.projectId}${groupBadge}</td>
-          <td>${displayName}</td>
-          <td>${s.location || '-'}</td>
-          <td>${s.capacity || '-'}</td>
-          <td>${Utils.formatCustomerNumber(s.customerNumber)}</td>
-          <td>${s.customerBank || '-'}</td>
-          <td>${Utils.formatAccountNumber(s.customerAccount)}</td>
-          <td class="num">${Utils.formatMoneyRaw(s.baseFee)}</td>
-          <td class="num">${Utils.formatMoneyRaw(Utils.calcVat(s.baseFee))}</td>
-          <td class="num"><strong>${Utils.formatMoneyRaw(Utils.calcTotal(s.baseFee))}</strong></td>
-          <td title="${(s.notes || '').replace(/"/g, '&quot;')}">${this.shortNote(s.notes)}</td>
-          <td>${appRcptCell}</td>
-          <td>${this.fileCell(s, 'feeNotice')}</td>
-          <td>${this.fileCell(s, 'transferReceipt', true)}</td>
-          <td>${Utils.describeDate(s.scheduledProcessDate)}</td>
+          <td><code>${this._esc(row.b)}</code></td>
+          <td>${this._esc(row.e)}</td>
+          <td>${this._esc(row.f)}</td>
+          <td class="num">${feeNum ? feeNum.toLocaleString('ko-KR') : ''}</td>
+          <td>${this._esc(Utils.formatCustomerNumber(row.j))}</td>
+          <td>${this._esc(row.k)}</td>
+          <td>${this._esc(Utils.formatAccountNumber(row.l))}</td>
+          <td>${this._esc(row.p)}</td>
           <td><span class="status-pill status-${status}">${status}</span></td>
         </tr>
       `;

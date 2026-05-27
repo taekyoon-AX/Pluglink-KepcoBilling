@@ -107,9 +107,14 @@ const Sync = {
     return this.call('append_processing_row', { sheetUrl, sheetGid, sheetName, row });
   },
 
-  /** TEST 시트의 모든 데이터 행 읽기 (납부 이력 탭용) */
+  /** TEST 시트의 모든 데이터 행 읽기 (납부 이력 탭용). 시공사는 A열 본인 것만 자동 필터됨 */
   async readProcessingRows(sheetUrl, sheetGid, sheetName) {
     return this.call('read_processing_rows', { sheetUrl, sheetGid, sheetName });
+  },
+
+  /** 처리 시트 설정을 서버에 저장 (시공사가 URL 없이 조회 가능하도록) */
+  async setProcessingSheetConfig(sheetUrl, sheetGid, sheetName) {
+    return this.call('set_processing_sheet_config', { sheetUrl, sheetGid, sheetName });
   },
 
   /** TEST 시트의 특정 행 수정 */

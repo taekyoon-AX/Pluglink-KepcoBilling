@@ -519,35 +519,32 @@
     <!-- 이력 -->
     <main id="panel-history" class="panel">
       <div class="panel-header">
-        <h2>제출 이력</h2>
+        <div>
+          <h2>납부 이력</h2>
+          <p class="muted">한전 표준시설부담금 납부내역 시트에 기록된 우리 시공사 항목입니다.</p>
+        </div>
         <div class="panel-actions">
           <select id="history-filter-status">
             <option value="">전체 상태</option>
             <option value="처리예정">처리예정</option>
             <option value="처리완료">처리완료</option>
           </select>
+          <button id="btn-refresh-history" class="primary">🔄 새로고침</button>
         </div>
       </div>
+      <div id="history-status" style="padding:8px 0;color:var(--muted);font-size:13px;"></div>
       <div class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
-            <th>제출일</th>
             <th>프로젝트ID</th>
-            <th>프로젝트명</th>
-            <th>거점</th>
+            <th>현장명</th>
             <th>용량</th>
+            <th>표준시설부담금</th>
             <th>고객번호</th>
             <th>은행</th>
             <th>계좌번호</th>
-            <th>표준부담금</th>
-            <th>부가세</th>
-            <th>청구금액</th>
-            <th>비고</th>
-            <th>접수증</th>
-            <th>고지서</th>
-            <th>이체증</th>
-            <th>처리예정일</th>
+            <th>처리일</th>
             <th>상태</th>
           </tr>
         </thead>

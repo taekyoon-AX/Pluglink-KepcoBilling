@@ -453,8 +453,15 @@ const AdminView = {
     if (!groups || !pdfBytes) return;
 
     const cfg = Storage.getConfig();
-    if (!Sync.enabled() || !cfg.processedFolderId) {
-      alert('처리완료 폴더가 설정되지 않았습니다. 설정 탭에서 폴더 URL을 입력하세요.');
+    const driveConfigured = !!(Sync.enabled() && cfg.processedFolderId);
+
+    // 로컬 폴더 핸들 (있으면 가져옴)
+    let localHandle = null;
+    try { localHandle = await this.getLocalFolderHandle(); } catch (e) { localHandle = null; }
+    const localConfigured = !!localHandle;
+
+    if (!driveConfigured && !localConfigured) {
+      alert('처리완료 폴더가 설정되지 않았습니다.\nDrive 폴더 또는 PC 로컬 폴더를 설정해주세요.');
       return;
     }
 
@@ -471,13 +478,16 @@ const AdminView = {
       return;
     }
 
-    if (!confirm(`${distributable.length}개 프로젝트 폴더에 이체증 파일을 분배합니다.\n상태는 변경되지 않습니다. 계속하시겠습니까?`)) return;
+    const targets = [];
+    if (driveConfigured) targets.push('☁️ Drive');
+    if (localConfigured) targets.push('💻 PC 로컬');
+    if (!confirm(`${distributable.length}개 프로젝트 폴더(${targets.join(' + ')})에 이체증 파일을 분배합니다.\n상태는 변경되지 않습니다. 계속하시겠습니까?`)) return;
 
     const { PDFDocument } = window.PDFLib;
     const srcDoc = await PDFDocument.load(pdfBytes);
 
     statusEl.textContent = '⏳ 분배 중...';
-    let success = 0, fail = 0;
+    let driveOk = 0, driveFail = 0, localOk = 0, localFail = 0;
     const errors = [];
 
     for (const [proj, pages] of Object.entries(groups)) {
@@ -485,47 +495,73 @@ const AdminView = {
       const targetSubs = subsByProj[proj];
       if (!targetSubs || targetSubs.length === 0) continue;
 
+      let newPdfBytes;
+      let folderName, fileName;
       try {
         // 해당 프로젝트 페이지들 추출
         const newDoc = await PDFDocument.create();
         const pageIdxs = pages.map(p => p.page - 1);
         const copied = await newDoc.copyPages(srcDoc, pageIdxs);
         copied.forEach(p => newDoc.addPage(p));
-        const newPdfBytes = await newDoc.save();
+        newPdfBytes = await newDoc.save();
 
-        // 폴더명 결정 (copyToProcessedFolder 와 동일한 로직)
+        // 폴더명 / 파일명 결정 (copyToProcessedFolder 와 동일한 로직)
         const groupSize = targetSubs.length;
         const rep = { ...targetSubs[0] };
         rep.location = groupSize > 1 ? `${groupSize}거점` : '';
-        const folderName = Utils.getProjectIdent(rep);
-
-        // 파일명 생성
+        folderName = Utils.getProjectIdent(rep);
         const today = new Date();
         const dateStr = Utils.toYMD(today).replace(/-/g, '');
-        const fileName = `이체증_${proj}_${dateStr}.pdf`;
-
-        // 처리완료 폴더 하위 프로젝트 폴더에 복사
-        const r = await Sync.copyToProcessedFolder(cfg.processedFolderId, folderName, [{
-          base64: this._arrayBufferToBase64(newPdfBytes),
-          mimeType: 'application/pdf',
-          name: fileName,
-        }]);
-
-        if (r.ok) {
-          success++;
-        } else {
-          fail++;
-          errors.push(`${proj}: ${r.error}`);
-        }
+        fileName = `이체증_${proj}_${dateStr}.pdf`;
       } catch (e) {
-        fail++;
-        errors.push(`${proj}: ${e.message}`);
-        console.error('Split distribute error', proj, e);
+        errors.push(`${proj} (PDF 추출): ${e.message}`);
+        console.error('Split PDF extract error', proj, e);
+        continue;
+      }
+
+      // ── Drive 저장 ──
+      if (driveConfigured) {
+        try {
+          const r = await Sync.copyToProcessedFolder(cfg.processedFolderId, folderName, [{
+            base64: this._arrayBufferToBase64(newPdfBytes),
+            mimeType: 'application/pdf',
+            name: fileName,
+          }]);
+          const okFile = r.ok && r.results && r.results[0] && r.results[0].ok;
+          if (okFile) driveOk++;
+          else {
+            driveFail++;
+            const errMsg = r.error || (r.results && r.results[0] && r.results[0].error) || 'unknown';
+            errors.push(`Drive[${proj}]: ${errMsg}`);
+          }
+        } catch (e) {
+          driveFail++;
+          errors.push(`Drive[${proj}]: ${e.message}`);
+        }
+      }
+
+      // ── PC 로컬 저장 ──
+      if (localConfigured) {
+        try {
+          const projHandle = await localHandle.getDirectoryHandle(folderName, { create: true });
+          const fh = await projHandle.getFileHandle(fileName, { create: true });
+          const writable = await fh.createWritable();
+          await writable.write(newPdfBytes);
+          await writable.close();
+          localOk++;
+        } catch (e) {
+          localFail++;
+          errors.push(`Local[${proj}]: ${e.message}`);
+          console.warn('Split local write error', proj, e);
+        }
       }
     }
 
     statusEl.textContent = '';
-    alert(`✓ 이체증 분배 완료\n\n성공: ${success}건\n실패: ${fail}건${fail > 0 ? '\n\n' + errors.slice(0, 5).join('\n') : ''}`);
+    const lines = [];
+    if (driveConfigured) lines.push(`☁️ Drive: ${driveOk}개 저장${driveFail ? ` (실패 ${driveFail})` : ''}`);
+    if (localConfigured) lines.push(`💻 PC 로컬: ${localOk}개 저장${localFail ? ` (실패 ${localFail})` : ''}`);
+    alert(`✓ 이체증 분배 완료\n\n${lines.join('\n')}${errors.length > 0 ? '\n\n오류 (최대 5건):\n' + errors.slice(0, 5).join('\n') : ''}`);
     this.closeSplitModal();
     // 상태 미변경이므로 대시보드 재렌더 불필요 (선택적)
   },

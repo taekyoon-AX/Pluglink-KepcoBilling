@@ -26,7 +26,8 @@ const ContractorView = {
     };
     document.getElementById('excel-import-input').onchange = (e) => this.importExcel(e.target.files[0]);
     document.getElementById('btn-download-template').onclick = () => this.downloadTemplate();
-    document.getElementById('history-filter-status').onchange = () => this.renderHistory();
+    const filterStatusEl = document.getElementById('history-filter-status');
+    if (filterStatusEl) filterStatusEl.onchange = () => this.renderHistory();
     const refreshHistBtn = document.getElementById('btn-refresh-history');
     if (refreshHistBtn) refreshHistBtn.onclick = () => this.loadPaymentHistory();
 
@@ -450,6 +451,33 @@ const ContractorView = {
       }
       Storage.addSubmission(item.data);
       if (Sync.enabled()) await Sync.pushSubmission(item.data);
+
+      // 납부대기 시트에도 행 추가 (best-effort)
+      if (Sync.enabled()) {
+        try {
+          const d = item.data;
+          // 현장명: parseProjectName 으로 정제 + 거점 suffix
+          const parsed = Utils.parseProjectName(d.projectName || '');
+          const cleanName = parsed.round ? `${parsed.name}_${parsed.round}차` : (parsed.name || d.projectName || '');
+          const locSuffix = d.location ? `-${d.location}` : '';
+          const pendingRow = {
+            a: auth.name || auth.id,            // A = 시공사 (서버에서 강제 덮어씀)
+            b: d.projectId,                      // B = 프로젝트ID
+            e: cleanName + locSuffix,            // E = 현장명
+            f: d.capacity ? `${d.capacity} kW` : '', // F = 용량
+            g: Number(d.baseFee) || 0,           // G = 표준시설부담금
+            j: d.customerNumber || '',           // J = 고객번호
+            k: d.customerBank || '',             // K = 은행
+            l: d.customerAccount || '',          // L = 고객지정계좌
+            r: d.notes || '',                    // R = 비고
+          };
+          const pr = await Sync.appendPendingRow(pendingRow);
+          if (!pr.ok) console.warn('납부대기 추가 실패:', pr.error);
+          else console.log(`✓ 납부대기 ${pr.rowNumber}행 추가 (${d.projectId})`);
+        } catch (e) {
+          console.warn('납부대기 추가 예외:', e);
+        }
+      }
     }
 
     msgEl.innerHTML =
@@ -587,45 +615,102 @@ const ContractorView = {
   },
 
   /**
-   * 납부내역 시트에서 본인 시공사(A열) 행을 서버에서 필터링하여 로드
-   * (서버 저장 설정을 사용하므로 URL 미전달)
+   * 납부대기 + 납부내역 두 시트에서 본인 시공사 행을 동시 로드 (서버가 A열 필터링)
    */
   async loadPaymentHistory() {
     const statusEl = document.getElementById('history-status');
     if (!Sync.enabled()) {
       this._paymentHistoryRows = [];
+      this._pendingHistoryRows = [];
       if (statusEl) statusEl.innerHTML = '<span style="color:var(--warning)">⚠ 서버 연결이 설정되지 않아 납부 이력을 불러올 수 없습니다.</span>';
       this.renderHistory();
       return;
     }
     if (statusEl) statusEl.innerHTML = '⏳ 납부 이력 로드 중...';
-    const r = await Sync.readProcessingRows('', '', ''); // 서버 저장 설정 + A열 본인 필터
-    if (!r.ok) {
+
+    const [paidRes, pendingRes] = await Promise.all([
+      Sync.readProcessingRows('', '', ''),
+      Sync.readPendingRows('', '', ''),
+    ]);
+
+    if (paidRes.ok) {
+      this._paymentHistoryRows = [...(paidRes.rows || [])].reverse();
+    } else {
       this._paymentHistoryRows = [];
-      if (statusEl) statusEl.innerHTML = `<span style="color:var(--danger)">✗ 로드 실패: ${this._esc(r.error || '')}</span>`;
-      this.renderHistory();
-      return;
+      console.warn('납부내역 로드 실패:', paidRes.error);
     }
-    // 최신(시트 하단) 행이 위로
-    this._paymentHistoryRows = [...(r.rows || [])].reverse();
-    if (statusEl) statusEl.innerHTML = `<span style="color:var(--success)">✓ ${this._paymentHistoryRows.length}건 로드 완료</span>`;
+    if (pendingRes.ok) {
+      this._pendingHistoryRows = [...(pendingRes.rows || [])].reverse();
+    } else {
+      this._pendingHistoryRows = [];
+      // 납부대기 시트 미설정은 경고 수준 (필수 X)
+      console.warn('납부대기 로드:', pendingRes.error);
+    }
+
+    if (statusEl) {
+      const parts = [];
+      parts.push(`납부대기 ${this._pendingHistoryRows.length}건`);
+      parts.push(`납부완료 ${this._paymentHistoryRows.length}건`);
+      statusEl.innerHTML = `<span style="color:var(--success)">✓ ${parts.join(' · ')}</span>`;
+    }
     this.renderHistory();
   },
 
   renderHistory() {
-    const rows = this._paymentHistoryRows || [];
-    const fStatus = document.getElementById('history-filter-status').value;
-    const tbody = document.getElementById('contractor-tbody');
+    this._renderPendingTable();
+    this._renderPaidTable();
+  },
 
-    const statusOf = (row) => row.q ? '처리완료' : '처리예정';
-    const filtered = rows.filter(row => !fStatus || statusOf(row) === fStatus);
+  /** 카드 1: 납부 대기 (납부대기 시트) */
+  _renderPendingTable() {
+    const rows = this._pendingHistoryRows || [];
+    const tbody = document.getElementById('contractor-pending-tbody');
+    const countEl = document.getElementById('pending-count');
+    if (!tbody) return;
+    if (countEl) countEl.textContent = `(${rows.length}건)`;
 
-    if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--muted);">납부 이력이 없습니다.</td></tr>`;
+    if (rows.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--muted);">대기 중인 납부 건이 없습니다.</td></tr>`;
       return;
     }
 
-    tbody.innerHTML = filtered.map(row => {
+    tbody.innerHTML = rows.map(row => {
+      const feeNum = row.g ? Number(String(row.g).replace(/[^0-9.-]/g, '')) : 0;
+      const noteText = row.r || '';
+      const noteDisplay = noteText
+        ? (noteText.length > 14 ? this._esc(noteText.slice(0, 14)) + '…' : this._esc(noteText))
+        : '✏️ 추가';
+      return `
+        <tr>
+          <td><code>${this._esc(row.b)}</code></td>
+          <td>${this._esc(row.e)}</td>
+          <td>${this._esc(row.f)}</td>
+          <td class="num">${feeNum ? feeNum.toLocaleString('ko-KR') : ''}</td>
+          <td>${this._esc(Utils.formatCustomerNumber(row.j))}</td>
+          <td>${this._esc(row.k)}</td>
+          <td>${this._esc(Utils.formatAccountNumber(row.l))}</td>
+          <td title="${this._esc(noteText)}" style="cursor:pointer;color:${noteText ? 'var(--primary)' : 'var(--muted)'}"
+              onclick="ContractorView.editPendingNote(${row.rowNumber})">${noteDisplay}</td>
+        </tr>
+      `;
+    }).join('');
+  },
+
+  /** 카드 2: 납부 완료 (납부내역 시트) */
+  _renderPaidTable() {
+    const rows = this._paymentHistoryRows || [];
+    const tbody = document.getElementById('contractor-tbody');
+    const countEl = document.getElementById('paid-count');
+    if (!tbody) return;
+    if (countEl) countEl.textContent = `(${rows.length}건)`;
+
+    if (rows.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:24px;color:var(--muted);">완료된 납부 건이 없습니다.</td></tr>`;
+      return;
+    }
+
+    const statusOf = (row) => row.q ? '처리완료' : '처리예정';
+    tbody.innerHTML = rows.map(row => {
       const status = statusOf(row);
       const feeNum = row.g ? Number(String(row.g).replace(/[^0-9.-]/g, '')) : 0;
       const noteText = row.r || '';
@@ -650,20 +735,24 @@ const ContractorView = {
     }).join('');
   },
 
-  /** 납부내역 시트 R열(비고) 수정 — 시공사 본인 행만 (서버 검증) */
+  /** 납부내역 시트 R열 비고 수정 */
   async editNote(rowNumber) {
     const rows = this._paymentHistoryRows || [];
     const row = rows.find(r => r.rowNumber === rowNumber);
     if (!row) return;
     const newNote = prompt('비고 입력:', row.r || '');
-    if (newNote === null) return; // 취소
+    if (newNote === null) return;
     const r = await Sync.updateProcessingNote(rowNumber, newNote);
-    if (!r.ok) {
-      alert('비고 저장 실패: ' + (r.error || ''));
-      return;
-    }
-    row.r = newNote; // 로컬 캐시 갱신
-    this.renderHistory();
+    if (!r.ok) { alert('비고 저장 실패: ' + (r.error || '')); return; }
+    row.r = newNote;
+    this._renderPaidTable();
+  },
+
+  /** 납부대기 시트 R열 비고 수정 — 현재는 미지원 알림 (향후 update_pending_note 추가 시 가능) */
+  async editPendingNote(rowNumber) {
+    // 납부대기는 일괄제출 직후의 임시 상태로 admin 처리 전까지 짧게 머무름.
+    // 비고 수정은 admin 확인완료 후 납부내역 카드에서 가능.
+    alert('납부 대기 중인 항목의 비고는 관리자 처리 완료 후 "납부 완료" 카드에서 수정 가능합니다.');
   },
 
   shortNote(notes) {

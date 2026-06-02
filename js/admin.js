@@ -1115,6 +1115,7 @@ const AdminView = {
     const refData = await this._lookupBillingRef(sub.projectId);
 
     const row = {
+      a: sub.contractor || '',             // A = 시공사
       b: sub.projectId,                    // B = 프로젝트ID (거점 suffix 없이)
       e: cleanName + locSuffix,            // E = 현장명 (-N거점)
       f: capacityVal,                      // F = 용량 (예: "30 kW")
@@ -1138,8 +1139,23 @@ const AdminView = {
     );
     if (!r.ok) {
       console.warn('처리 시트 기록 실패:', r.error);
-    } else {
-      console.log(`✓ 처리 시트 ${r.sheet} 시트 ${r.rowNumber}행 추가 (${sub.projectId}${locSuffix})`);
+      return;
+    }
+    console.log(`✓ 처리 시트 ${r.sheet} ${r.rowNumber}행 추가 (${sub.projectId}${locSuffix})`);
+
+    // 납부내역 기록 성공 → 납부대기에서 같은 행 삭제 (best-effort)
+    if (cfg.pendingSheetUrl) {
+      try {
+        const delRes = await Sync.deletePendingRowMatching(
+          { a: sub.contractor || '', b: sub.projectId, e: cleanName + locSuffix },
+          cfg.pendingSheetUrl, cfg.pendingSheetGid, cfg.pendingSheetName,
+        );
+        if (delRes.ok && delRes.deleted > 0) {
+          console.log(`✓ 납부대기 ${delRes.rowNumber}행 삭제`);
+        }
+      } catch (e) {
+        console.warn('납부대기 삭제 실패:', e);
+      }
     }
   },
 
@@ -1368,6 +1384,14 @@ const AdminView = {
     document.getElementById('cfg-processing-gid').value = cfg.processingSheetGid || '';
     document.getElementById('cfg-processing-name').value = cfg.processingSheetName || '';
 
+    // 납부대기 시트
+    const pendingUrlEl = document.getElementById('cfg-pending-url');
+    if (pendingUrlEl) {
+      pendingUrlEl.value = cfg.pendingSheetUrl || '';
+      document.getElementById('cfg-pending-gid').value = cfg.pendingSheetGid || '';
+      document.getElementById('cfg-pending-name').value = cfg.pendingSheetName || '';
+    }
+
     // 처리완료 폴더
     document.getElementById('cfg-processed-folder').value = cfg.processedFolderUrl || '';
   },
@@ -1457,6 +1481,24 @@ const AdminView = {
     if (Sync.enabled() && processingUrl) {
       Sync.setProcessingSheetConfig(processingUrl, processingGid, cfg.processingSheetName)
         .catch(e => console.warn('처리 시트 설정 서버 저장 실패:', e));
+    }
+
+    // 납부대기 시트 저장
+    const pendingUrlInput = document.getElementById('cfg-pending-url');
+    if (pendingUrlInput) {
+      const pendingUrl = pendingUrlInput.value.trim();
+      cfg.pendingSheetUrl = pendingUrl;
+      let pendingGid = document.getElementById('cfg-pending-gid').value.trim();
+      if (!pendingGid && pendingUrl) {
+        const m = pendingUrl.match(/[#&?]gid=(\d+)/);
+        pendingGid = m ? m[1] : '';
+      }
+      cfg.pendingSheetGid = pendingGid;
+      cfg.pendingSheetName = document.getElementById('cfg-pending-name').value.trim();
+      if (Sync.enabled() && pendingUrl) {
+        Sync.setPendingSheetConfig(pendingUrl, pendingGid, cfg.pendingSheetName)
+          .catch(e => console.warn('납부대기 시트 설정 서버 저장 실패:', e));
+      }
     }
 
     // 처리완료 폴더 저장

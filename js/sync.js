@@ -122,6 +122,21 @@ const Sync = {
     return this.call('update_processing_note', { rowNumber, note, sheetUrl: sheetUrl || '', sheetGid: sheetGid || '', sheetName: sheetName || '' });
   },
 
+  // ─── 납부대기 시트 (Pending) ───
+  async setPendingSheetConfig(sheetUrl, sheetGid, sheetName) {
+    return this.call('set_pending_sheet_config', { sheetUrl, sheetGid, sheetName });
+  },
+  async readPendingRows(sheetUrl, sheetGid, sheetName) {
+    return this.call('read_pending_rows', { sheetUrl: sheetUrl || '', sheetGid: sheetGid || '', sheetName: sheetName || '' });
+  },
+  async appendPendingRow(row, sheetUrl, sheetGid, sheetName) {
+    return this.call('append_pending_row', { row, sheetUrl: sheetUrl || '', sheetGid: sheetGid || '', sheetName: sheetName || '' });
+  },
+  /** admin: 확인완료 후 매칭 행 삭제. match = { a, b, e } */
+  async deletePendingRowMatching(match, sheetUrl, sheetGid, sheetName) {
+    return this.call('delete_pending_row_matching', { match, sheetUrl: sheetUrl || '', sheetGid: sheetGid || '', sheetName: sheetName || '' });
+  },
+
   /** TEST 시트의 특정 행 수정 */
   async updateProcessingRow(sheetUrl, sheetGid, sheetName, rowNumber, row) {
     return this.call('update_processing_row', { sheetUrl, sheetGid, sheetName, rowNumber, row });

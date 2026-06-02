@@ -409,6 +409,28 @@
         </div>
 
         <div class="card" style="grid-column: 1 / -1;">
+          <h3>⏳ 납부대기 시트 (시공사 일괄 제출 → 임시 저장)</h3>
+          <p class="muted" style="margin-bottom:10px">
+            시공사가 <strong>일괄 제출</strong>하면 우선 이 시트로 들어가고, 관리자가 <strong>확인완료</strong>를 누르면 처리 결과 기록 시트로 이동합니다.
+            처리 결과 기록 시트와 컬럼 구조가 동일해야 합니다.
+          </p>
+          <div style="display:grid;grid-template-columns:1fr 180px 220px;gap:8px;">
+            <label>
+              <span>시트 URL</span>
+              <input type="text" id="cfg-pending-url" placeholder="https://docs.google.com/spreadsheets/d/.../edit" />
+            </label>
+            <label>
+              <span>GID (자동추출)</span>
+              <input type="text" id="cfg-pending-gid" placeholder="(자동)" />
+            </label>
+            <label>
+              <span>시트(탭)명</span>
+              <input type="text" id="cfg-pending-name" placeholder="납부대기" />
+            </label>
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
           <h3>📝 처리 결과 기록 시트 (납부 이력)</h3>
           <p class="muted" style="margin-bottom:10px">
             처리완료 시 자동으로 행이 추가되는 시트. 납부 이력 탭에서도 이 시트를 읽어옵니다.
@@ -525,37 +547,61 @@
       <div class="panel-header">
         <div>
           <h2>납부 이력</h2>
-          <p class="muted">한전 표준시설부담금 납부내역 시트에 기록된 우리 시공사 항목입니다.</p>
+          <p class="muted">납부 대기 중인 건과 이미 납부 처리된 건이 분리 표시됩니다.</p>
         </div>
         <div class="panel-actions">
-          <select id="history-filter-status">
-            <option value="">전체 상태</option>
-            <option value="처리예정">처리예정</option>
-            <option value="처리완료">처리완료</option>
-          </select>
           <button id="btn-refresh-history" class="primary">🔄 새로고침</button>
         </div>
       </div>
       <div id="history-status" style="padding:8px 0;color:var(--muted);font-size:13px;"></div>
-      <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr>
-            <th>프로젝트ID</th>
-            <th>현장명</th>
-            <th>용량</th>
-            <th>표준시설부담금</th>
-            <th>고객번호</th>
-            <th>은행</th>
-            <th>계좌번호</th>
-            <th>처리일</th>
-            <th>상태</th>
-            <th>비고</th>
-          </tr>
-        </thead>
-        <tbody id="contractor-tbody"></tbody>
-      </table>
-      </div>
+
+      <!-- 카드 1: 납부 대기 -->
+      <section class="card" style="margin-bottom:18px;">
+        <h3 style="margin-bottom:8px;">⏳ 납부 대기 <span id="pending-count" class="muted" style="font-weight:normal;font-size:13px;"></span></h3>
+        <p class="muted" style="margin-bottom:10px;font-size:12px;">일괄 제출 후 관리자 확인 대기 중인 건입니다. 비고는 클릭해서 수정할 수 있습니다.</p>
+        <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>프로젝트ID</th>
+              <th>현장명</th>
+              <th>용량</th>
+              <th>표준시설부담금</th>
+              <th>고객번호</th>
+              <th>은행</th>
+              <th>계좌번호</th>
+              <th>비고</th>
+            </tr>
+          </thead>
+          <tbody id="contractor-pending-tbody"></tbody>
+        </table>
+        </div>
+      </section>
+
+      <!-- 카드 2: 납부 완료/처리 -->
+      <section class="card">
+        <h3 style="margin-bottom:8px;">✅ 납부 완료 <span id="paid-count" class="muted" style="font-weight:normal;font-size:13px;"></span></h3>
+        <p class="muted" style="margin-bottom:10px;font-size:12px;">관리자가 확인완료하여 납부내역 시트에 기록된 건입니다.</p>
+        <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>프로젝트ID</th>
+              <th>현장명</th>
+              <th>용량</th>
+              <th>표준시설부담금</th>
+              <th>고객번호</th>
+              <th>은행</th>
+              <th>계좌번호</th>
+              <th>처리일</th>
+              <th>상태</th>
+              <th>비고</th>
+            </tr>
+          </thead>
+          <tbody id="contractor-tbody"></tbody>
+        </table>
+        </div>
+      </section>
     </main>
   </section>
 

@@ -105,6 +105,27 @@ function doPost(e) {
         if (auth.role !== 'admin') { result = { ok: false, error: 'admin_only' }; break; }
         result = updateQStatus(data.sheetUrl, data.sheetGid, data.sheetName, data.rowNumbers, data.value);
         break;
+
+      // ===== 납부대기 시트 (Pending Payment) =====
+      case 'set_pending_sheet_config':
+        // 납부대기 시트 설정 서버 저장
+        if (auth.role !== 'admin') { result = { ok: false, error: 'admin_only' }; break; }
+        result = setPendingSheetConfig(data.sheetUrl, data.sheetGid, data.sheetName);
+        break;
+      case 'read_pending_rows':
+        // 납부대기 시트 행 읽기. admin=전체 / contractor=A열(시공사) 본인 것만
+        result = readPendingRowsWithAuth(auth, data.sheetUrl, data.sheetGid, data.sheetName);
+        break;
+      case 'append_pending_row':
+        // 시공사 일괄 제출 시 납부대기 시트에 행 추가
+        // contractor: A열(시공사) 강제로 본인 이름
+        result = appendPendingRowWithAuth(auth, data.sheetUrl, data.sheetGid, data.sheetName, data.row);
+        break;
+      case 'delete_pending_row_matching':
+        // admin이 납부내역으로 옮긴 뒤 납부대기에서 해당 행 삭제
+        if (auth.role !== 'admin') { result = { ok: false, error: 'admin_only' }; break; }
+        result = deletePendingRowMatching(data.sheetUrl, data.sheetGid, data.sheetName, data.match);
+        break;
       case 'copy_to_processed_folder':
         // 처리완료 폴더에 파일 복사 + 텍스트 쓰기 (비고)
         if (auth.role !== 'admin') { result = { ok: false, error: 'admin_only' }; break; }
@@ -840,7 +861,7 @@ function appendProcessingRow(sheetUrl, gid, sheetName, row) {
     // 컬럼 키별 매핑 (B=2, ..., P=16)
     const colMap = {
       b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10,
-      k: 11, l: 12, m: 13, n: 14, o: 15, p: 16, q: 17, r: 18,
+      a: 1, k: 11, l: 12, m: 13, n: 14, o: 15, p: 16, q: 17, r: 18,
     };
 
     // P열(날짜)은 Date 객체로 변환해 셀에 날짜 서식이 정상 적용되도록 함
@@ -878,6 +899,114 @@ function _getStoredProcessingConfig() {
   var raw = PropertiesService.getScriptProperties().getProperty('PROCESSING_SHEET_CONFIG');
   if (!raw) return null;
   try { return JSON.parse(raw); } catch (e) { return null; }
+}
+
+// ============ 납부대기 시트 설정 저장/조회 ============
+function setPendingSheetConfig(url, gid, name) {
+  PropertiesService.getScriptProperties().setProperty(
+    'PENDING_SHEET_CONFIG',
+    JSON.stringify({ url: url || '', gid: gid || '', name: name || '' })
+  );
+  return { ok: true };
+}
+
+function _getStoredPendingConfig() {
+  var raw = PropertiesService.getScriptProperties().getProperty('PENDING_SHEET_CONFIG');
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }
+}
+
+function _resolvePendingConfig(sheetUrl, gid, sheetName) {
+  var url = sheetUrl, g = gid, name = sheetName;
+  if (!url) {
+    var stored = _getStoredPendingConfig();
+    if (stored) { url = stored.url; g = stored.gid; name = stored.name; }
+  }
+  return { url: url, gid: g, name: name };
+}
+
+// ============ 권한별 납부대기 시트 행 읽기 ============
+function readPendingRowsWithAuth(auth, sheetUrl, gid, sheetName) {
+  var cfg = _resolvePendingConfig(sheetUrl, gid, sheetName);
+  if (!cfg.url) return { ok: false, error: '납부대기 시트가 설정되지 않았습니다.' };
+
+  var result = readProcessingRows(cfg.url, cfg.gid, cfg.name);
+  if (result.ok && auth && auth.role === 'contractor') {
+    var myName = String(auth.name || auth.id || '');
+    var nrm = function (s) { return String(s || '').replace(/\s+/g, '').toLowerCase(); };
+    var target = nrm(myName);
+    result.rows = (result.rows || []).filter(function (r) {
+      var a = nrm(r.a);
+      if (!a || !target) return false;
+      var tokens = a.split(/[,/·|]/).map(function (t) { return t.trim(); }).filter(Boolean);
+      if (tokens.length > 1) {
+        return tokens.some(function (t) { return t === target || t.indexOf(target) >= 0 || target.indexOf(t) >= 0; });
+      }
+      return a === target || a.indexOf(target) >= 0 || target.indexOf(a) >= 0;
+    });
+    result.total = result.rows.length;
+  }
+  return result;
+}
+
+// ============ 납부대기 시트 행 추가 (시공사 일괄 제출용) ============
+function appendPendingRowWithAuth(auth, sheetUrl, gid, sheetName, row) {
+  var cfg = _resolvePendingConfig(sheetUrl, gid, sheetName);
+  if (!cfg.url) return { ok: false, error: '납부대기 시트가 설정되지 않았습니다.' };
+
+  // contractor: A열(시공사) 본인 이름 강제 (impersonation 방지)
+  row = row || {};
+  if (auth && auth.role === 'contractor') {
+    row.a = auth.name || auth.id;
+  }
+  return appendProcessingRow(cfg.url, cfg.gid, cfg.name, row);
+}
+
+// ============ 납부대기 시트에서 조건 일치 행 삭제 ============
+/**
+ * admin 이 확인완료 시 호출. match = { a: 시공사, b: 프로젝트ID, e: 현장명 }.
+ * 첫 매칭되는 행을 삭제하고 삭제된 행 번호 반환. 매칭 없으면 ok=true, deleted=0.
+ */
+function deletePendingRowMatching(sheetUrl, gid, sheetName, match) {
+  try {
+    var cfg = _resolvePendingConfig(sheetUrl, gid, sheetName);
+    if (!cfg.url) return { ok: false, error: '납부대기 시트가 설정되지 않았습니다.' };
+    if (!match) return { ok: false, error: 'match 조건 필요' };
+
+    var id = extractSheetId(cfg.url);
+    var ss = SpreadsheetApp.openById(id);
+    var sheet;
+    if (cfg.name) sheet = ss.getSheetByName(cfg.name);
+    if (!sheet && cfg.gid) sheet = ss.getSheets().filter(function (s) { return String(s.getSheetId()) === String(cfg.gid); })[0];
+    if (!sheet) return { ok: false, error: '시트를 찾을 수 없음' };
+
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 4) return { ok: true, deleted: 0 }; // 데이터 없음
+
+    var data = sheet.getRange(1, 1, lastRow, 5).getValues(); // A~E열
+    var nrm = function (s) { return String(s || '').replace(/\s+/g, '').toLowerCase(); };
+    var targetA = nrm(match.a);
+    var targetB = nrm(match.b);
+    var targetE = match.e == null ? null : nrm(match.e); // E는 옵션
+
+    var DATA_START_ROW = 4;
+    for (var r = DATA_START_ROW - 1; r < data.length; r++) {
+      var row = data[r];
+      var a = nrm(row[0]);
+      var b = nrm(row[1]);
+      var e = nrm(row[4]);
+      if (!b) continue;
+      if (targetB && b !== targetB) continue;
+      if (targetA && a !== targetA) continue;
+      if (targetE != null && e !== targetE) continue;
+      // 매칭 — 삭제
+      sheet.deleteRow(r + 1);
+      return { ok: true, deleted: 1, rowNumber: r + 1 };
+    }
+    return { ok: true, deleted: 0 };
+  } catch (err) {
+    return { ok: false, error: err.toString() };
+  }
 }
 
 // ============ 권한별 처리 시트 행 읽기 ============
@@ -1077,7 +1206,7 @@ function updateProcessingRow(sheetUrl, gid, sheetName, rowNumber, row) {
 
     const colMap = {
       b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10,
-      k: 11, l: 12, m: 13, n: 14, o: 15, p: 16, q: 17, r: 18,
+      a: 1, k: 11, l: 12, m: 13, n: 14, o: 15, p: 16, q: 17, r: 18,
     };
 
     const parseDateCol = (k, v) => {

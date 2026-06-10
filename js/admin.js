@@ -169,7 +169,8 @@ const AdminView = {
       const fee = parseFee(r.g);
       return sum + fee + Math.round(fee * 0.1);
     }, 0);
-    const doneCount = Object.keys(this._qStatusMap || {}).length;
+    // 처리완료: 납부내역 Q=TRUE 실제 행 수
+    const doneCount = this._doneRowCount || 0;
     const totalCount = this._totalSheetCount > 0 ? this._totalSheetCount : pendingRows.length;
 
     document.getElementById('stat-row').innerHTML = `
@@ -644,13 +645,18 @@ const AdminView = {
       this._qStatusMap = {};
       this._sheetRowMap = {};
       this._totalSheetCount = r.total || 0;
+      let doneRowCount = 0;
       (r.rows || []).forEach(row => {
         const pid = String(row.b || '').trim();
         if (!pid) return;
-        if (row.q) this._qStatusMap[pid] = true;
+        if (row.q) {
+          this._qStatusMap[pid] = true;
+          doneRowCount++; // 실제 Q=TRUE 행 수
+        }
         if (!this._sheetRowMap[pid]) this._sheetRowMap[pid] = [];
         this._sheetRowMap[pid].push(row.rowNumber);
       });
+      this._doneRowCount = doneRowCount;
     } catch (e) {
       console.warn('Q 상태 로드 실패:', e);
     }
@@ -2356,9 +2362,28 @@ const AdminView = {
   },
 
   // ---------- 엑셀 / ZIP ----------
+  /** 대시보드 필터를 납부대기 행에 적용 (엑셀/ZIP 공용) */
+  _filteredPendingRows() {
+    const rows = this._dashboardPendingRows || [];
+    const fContractor = document.getElementById('filter-contractor').value;
+    const fSearch = document.getElementById('filter-search').value.trim().toLowerCase();
+    return rows.filter(row => {
+      if (fContractor && row.a !== fContractor) return false;
+      if (fSearch) {
+        const hay = `${row.b} ${row.e} ${row.j} ${row.a}`.toLowerCase();
+        if (!hay.includes(fSearch)) return false;
+      }
+      return true;
+    });
+  },
+
   async exportExcel() {
-    const submissions = Storage.getSubmissions().filter(s => this.getEffectiveStatus(s) === '처리예정');
-    if (submissions.length === 0) { alert('처리예정 데이터가 없습니다.'); return; }
+    // 전체 제출 현황(= 납부대기 시트) 데이터 사용
+    if (!this._dashboardPendingRows) {
+      await this.loadDashboardPending();
+    }
+    const filtered = this._filteredPendingRows();
+    if (filtered.length === 0) { alert('전체 제출 현황 데이터가 없습니다.'); return; }
 
     const cfg = Storage.getConfig();
 
@@ -2376,8 +2401,7 @@ const AdminView = {
     const wb = XLSX.read(templateBuf, { type: 'array', cellStyles: true });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    // 2) M·N·O(엑셀 L·M·N) 값을 참조 시트(PM_25년환경부입찰)에서 조회
-    //    참조 시트 미설정 시 중앙 시트로 폴백
+    // 2) M·N·O(엑셀 L·M·N) 값을 참조 시트(환경부 출금계좌)에서 조회
     const colM = (cfg.billingRefColM || 'AU').toUpperCase();
     const colN = (cfg.billingRefColN || 'AV').toUpperCase();
     const colO = (cfg.billingRefColO || 'AW').toUpperCase();
@@ -2386,9 +2410,9 @@ const AdminView = {
     const refGid  = useRef ? cfg.billingRefSheetGid  : cfg.centralProjectSheetGid;
     const refName = useRef ? cfg.billingRefSheetName : cfg.centralProjectSheetName;
 
-    let centralMap = {}; // { projectId: { m, n, o } }
+    let centralMap = {};
     if (Sync.enabled() && refUrl) {
-      const projectIds = [...new Set(submissions.map(s => s.projectId))];
+      const projectIds = [...new Set(filtered.map(r => r.b).filter(Boolean))];
       const r = await Sync.lookupCentralColumns(refUrl, refGid, refName, projectIds, [colM, colN, colO]);
       if (r.ok && r.map) {
         Object.keys(r.map).forEach(pid => {
@@ -2400,24 +2424,8 @@ const AdminView = {
       }
     }
 
-    // 3) 중복 projectId 그룹화 — 거점 번호 부여
-    // 같은 projectId 가 여러 번 나오면 -1거점, -2거점, -3거점 ... 순서대로
-    const projectCounts = {};
-    submissions.forEach(s => {
-      projectCounts[s.projectId] = (projectCounts[s.projectId] || 0) + 1;
-    });
-    const projectIndex = {}; // 현재까지 등장한 순번
-    const submissionLocationLabel = submissions.map(s => {
-      if (projectCounts[s.projectId] > 1) {
-        projectIndex[s.projectId] = (projectIndex[s.projectId] || 0) + 1;
-        return `-${projectIndex[s.projectId]}거점`;
-      }
-      return '';
-    });
-
-    // 4) 데이터 행 채우기 (5행부터 시작)
+    // 3) 데이터 행 채우기 (5행부터 시작)
     const startRow = 5;
-    // 5행 서식을 미리 캡처 (데이터 덮어쓰기 전에)
     const STYLE_COLS = ['B','C','D','E','F','G','H','I','J','K','L','M','N'];
     const templateStyles = {};
     STYLE_COLS.forEach(col => {
@@ -2425,13 +2433,18 @@ const AdminView = {
       if (cell && cell.s) templateStyles[col] = JSON.parse(JSON.stringify(cell.s));
     });
 
-    submissions.forEach((s, i) => {
+    const parseFee = v => Number(String(v || '').replace(/[^0-9.-]/g, '')) || 0;
+    const parseCap = v => {
+      const n = Number(String(v || '').replace(/[^0-9.]/g, ''));
+      return isNaN(n) ? '' : n;
+    };
+
+    filtered.forEach((row, i) => {
       const r = startRow + i;
-      const central = centralMap[s.projectId] || {};
+      const central = centralMap[row.b] || {};
       const set = (col, value, type) => {
         const addr = col + r;
         ws[addr] = { v: value, t: type || 's' };
-        // 5행에서 캡처한 서식 적용
         if (templateStyles[col]) ws[addr].s = templateStyles[col];
       };
       const setFormula = (col, formula, value) => {
@@ -2440,67 +2453,86 @@ const AdminView = {
         if (templateStyles[col]) ws[addr].s = templateStyles[col];
       };
 
-      const locSuffix = submissionLocationLabel[i];
-      const projectNameWithLoc = (s.projectName || '') + locSuffix;
+      const baseFee = parseFee(row.g);
+      const vat = Math.round(baseFee * 0.1);
+      const total = baseFee + vat;
+      const cap = parseCap(row.f);
 
-      // B: 번호 (1, 2, 3...)
+      // B: 번호
       set('B', i + 1, 'n');
       // C: 프로젝트ID
-      set('C', s.projectId || '', 's');
-      // D: 프로젝트명 + (거점 서픽스)
-      set('D', projectNameWithLoc, 's');
-      // E: 용량 (정수)
-      set('E', s.capacity ? Number(s.capacity) : '', s.capacity ? 'n' : 's');
+      set('C', row.b || '', 's');
+      // D: 현장명 (이미 거점 suffix 포함된 e열)
+      set('D', row.e || '', 's');
+      // E: 용량
+      set('E', cap, cap !== '' ? 'n' : 's');
       // F: 표준부담금
-      set('F', Number(s.baseFee) || 0, 'n');
-      // G: 부가세 (수식)
-      setFormula('G', `F${r}*0.1`, Utils.calcVat(s.baseFee));
-      // H: 청구금액 (수식)
-      setFormula('H', `F${r}+G${r}`, Utils.calcTotal(s.baseFee));
+      set('F', baseFee, 'n');
+      // G: 부가세
+      setFormula('G', `F${r}*0.1`, vat);
+      // H: 청구금액
+      setFormula('H', `F${r}+G${r}`, total);
       // I: 고객번호
-      set('I', s.customerNumber ? Utils.formatCustomerNumber(s.customerNumber) : '', 's');
+      set('I', row.j ? Utils.formatCustomerNumber(row.j) : '', 's');
       // J: 은행
-      set('J', s.customerBank || '', 's');
+      set('J', row.k || '', 's');
       // K: 계좌
-      set('K', s.customerAccount ? Utils.formatAccountNumber(s.customerAccount) : '', 's');
-      // L: 참조 시트 M열값 (기본 AU)
+      set('K', row.l ? Utils.formatAccountNumber(row.l) : '', 's');
+      // L: 참조 시트 M열값
       set('L', central.m != null ? central.m : '', typeof central.m === 'number' ? 'n' : 's');
-      // M: 참조 시트 N열값 (기본 AV)
+      // M: 참조 시트 N열값
       set('M', central.n != null ? central.n : '', typeof central.n === 'number' ? 'n' : 's');
-      // N: 참조 시트 O열값 (기본 AW)
+      // N: 참조 시트 O열값
       set('N', central.o != null ? central.o : '', typeof central.o === 'number' ? 'n' : 's');
     });
 
     // 4) 시트 범위 확장
-    const lastRow = startRow + submissions.length - 1;
+    const lastRow = startRow + filtered.length - 1;
     const ref = XLSX.utils.decode_range(ws['!ref'] || 'A1:N1');
     ref.e.r = Math.max(ref.e.r, lastRow - 1);
-    ref.e.c = Math.max(ref.e.c, 13); // N열까지
+    ref.e.c = Math.max(ref.e.c, 13);
     ws['!ref'] = XLSX.utils.encode_range(ref);
 
-    // 5) 합계 행 (선택적) — 마지막 행 다음에 청구금액 합계
+    // 5) 합계 행
     const totalRow = lastRow + 1;
+    const sumBase = filtered.reduce((s, x) => s + parseFee(x.g), 0);
     ws['B' + totalRow] = { v: '합계', t: 's' };
-    ws['F' + totalRow] = { f: `SUM(F${startRow}:F${lastRow})`, v: submissions.reduce((s, x) => s + Number(x.baseFee || 0), 0), t: 'n' };
-    ws['G' + totalRow] = { f: `SUM(G${startRow}:G${lastRow})`, v: submissions.reduce((s, x) => s + Utils.calcVat(x.baseFee), 0), t: 'n' };
-    ws['H' + totalRow] = { f: `SUM(H${startRow}:H${lastRow})`, v: submissions.reduce((s, x) => s + Utils.calcTotal(x.baseFee), 0), t: 'n' };
+    ws['F' + totalRow] = { f: `SUM(F${startRow}:F${lastRow})`, v: sumBase, t: 'n' };
+    ws['G' + totalRow] = { f: `SUM(G${startRow}:G${lastRow})`, v: Math.round(sumBase * 0.1), t: 'n' };
+    ws['H' + totalRow] = { f: `SUM(H${startRow}:H${lastRow})`, v: sumBase + Math.round(sumBase * 0.1), t: 'n' };
     ref.e.r = Math.max(ref.e.r, totalRow - 1);
     ws['!ref'] = XLSX.utils.encode_range(ref);
 
     // 6) 저장
     const today = new Date();
     const ymd = Utils.toYMD(today);
-    const filename = `한전표준시설부담금납부_${ymd}.xlsx`;
-    XLSX.writeFile(wb, filename);
+    XLSX.writeFile(wb, `한전표준시설부담금납부_${ymd}.xlsx`);
 
-    // 마지막 엑셀 출력 시각 저장
     cfg.lastExcelExport = new Date().toISOString();
     Storage.setConfig(cfg);
   },
 
   async exportZip() {
-    const submissions = Storage.getSubmissions().filter(s => this.getEffectiveStatus(s) === '처리예정');
-    if (submissions.length === 0) { alert('처리예정 데이터가 없습니다.'); return; }
+    // 전체 제출 현황(= 납부대기 시트) 데이터 사용
+    if (!this._dashboardPendingRows) {
+      await this.loadDashboardPending();
+    }
+    const filtered = this._filteredPendingRows();
+    if (filtered.length === 0) { alert('전체 제출 현황 데이터가 없습니다.'); return; }
+
+    // 각 납부대기 행과 매칭되는 내부 sub (파일 보유) 수집
+    const submissions = [];
+    let unmatchedCount = 0;
+    filtered.forEach(row => {
+      const sub = this._findMatchingSub(row);
+      if (sub) submissions.push(sub);
+      else unmatchedCount++;
+    });
+
+    if (submissions.length === 0) {
+      alert(`첨부파일이 있는 항목이 없습니다.\n(전체 제출 ${filtered.length}건 중 내부 매칭 0건)`);
+      return;
+    }
 
     const cfg = Storage.getConfig();
     const btn = document.getElementById('btn-export-zip');
@@ -2670,11 +2702,16 @@ const AdminView = {
       const blob = await zip.generateAsync({ type: 'blob' });
       saveAs(blob, `한전불입금_파일_${Utils.toYMD(new Date())}.zip`);
 
-      const summary = `✓ ZIP 다운로드 완료\n\n프로젝트 그룹: ${groupKeys.length}개\nPDF 병합: ${mergeCount}건\n로컬: ${stats.local}개 / 프록시: ${stats.proxy}개\n이미지→PDF: ${stats.imgConv}개\n실패: ${stats.errors.length}건`;
+      const unmatchedNote = unmatchedCount > 0
+        ? `\n⚠ 내부 데이터 미매칭(파일 없음): ${unmatchedCount}건 — ZIP 제외됨`
+        : '';
+      const summary = `✓ ZIP 다운로드 완료\n\n프로젝트 그룹: ${groupKeys.length}개\nPDF 병합: ${mergeCount}건\n로컬: ${stats.local}개 / 프록시: ${stats.proxy}개\n이미지→PDF: ${stats.imgConv}개\n실패: ${stats.errors.length}건${unmatchedNote}`;
       console.log(summary);
-      if (stats.errors.length > 0) {
+      if (stats.errors.length > 0 || unmatchedCount > 0) {
         console.warn('실패 목록:', stats.errors);
-        alert(summary + '\n\n실패한 항목은 콘솔(F12)에서 확인하세요.');
+        alert(summary + (stats.errors.length > 0 ? '\n\n실패한 항목은 콘솔(F12)에서 확인하세요.' : ''));
+      } else {
+        alert(summary);
       }
     } finally {
       btn.disabled = false;

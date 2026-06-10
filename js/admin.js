@@ -7,6 +7,7 @@ const AdminView = {
   _qStatusMap: {},   // projectId → true (Q=체크됨=처리완료)
   _sheetRowMap: {},  // projectId → rowNumber[] (납부내역 시트 행 번호)
   _totalSheetCount: 0, // 납부내역 시트 B열 총 건수 (전체 제출 stat)
+  _dashboardPendingRows: null, // 납부대기 시트 행 캐시 (대시보드 데이터 소스)
 
   async init() {
     const auth = Auth.current();
@@ -25,6 +26,8 @@ const AdminView = {
 
     // 액션 바인딩
     document.getElementById('btn-admin-logout').onclick = () => App.logout();
+    const refreshDashBtn = document.getElementById('btn-refresh-dashboard');
+    if (refreshDashBtn) refreshDashBtn.onclick = () => this._refreshDashboardData();
     document.getElementById('btn-export-excel').onclick = () => this.exportExcel();
     document.getElementById('btn-export-zip').onclick = () => this.exportZip();
     document.getElementById('btn-split-transfer').onclick = () => this.openSplitModal();
@@ -70,8 +73,11 @@ const AdminView = {
     this.renderDashboard();
     this.renderSettings();
 
-    // Q열 상태 비동기 로드 → 완료 시 대시보드 재렌더링
-    this.loadQStatus().then(() => this.renderDashboard()).catch(e => console.warn('Q 상태 로드 실패:', e));
+    // 납부대기 + Q열 상태 비동기 로드 → 완료 시 대시보드 재렌더링
+    Promise.all([
+      this.loadDashboardPending(),
+      this.loadQStatus(),
+    ]).then(() => this.renderDashboard()).catch(e => console.warn('대시보드 로드 실패:', e));
 
     // 자동 엑셀 출력 체크
     this.checkAutoExcelExport();
@@ -86,17 +92,46 @@ const AdminView = {
     });
     // 납부 이력 탭 전환 시 자동 로드
     if (tab === 'projects') this.loadPaymentHistory();
-    // 대시보드 탭 전환 시 Q 상태 갱신
+    // 대시보드 탭 전환 시 납부대기 + Q 상태 새로고침
     if (tab === 'dashboard') {
       this.renderDashboard(); // 캐시 상태로 즉시 렌더
-      this.loadQStatus().then(() => this.renderDashboard()).catch(() => {});
+      this._refreshDashboardData().catch(() => {});
     }
   },
 
   // ---------- 대시보드 ----------
+
+  /** 납부대기 시트 로드 (대시보드 데이터 소스) */
+  async loadDashboardPending() {
+    if (!Sync.enabled()) {
+      this._dashboardPendingRows = [];
+      return;
+    }
+    const r = await Sync.readPendingRows('', '', '');
+    if (r.ok) {
+      this._dashboardPendingRows = r.rows || [];
+    } else {
+      this._dashboardPendingRows = [];
+      console.warn('납부대기 로드 실패:', r.error);
+    }
+  },
+
+  /** 납부대기 행과 매칭되는 내부 submission 찾기 (파일 참조용) */
+  _findMatchingSub(row) {
+    const submissions = Storage.getSubmissions();
+    return submissions.find(s => {
+      if (s.contractor !== row.a) return false;
+      if (String(s.projectId) !== String(row.b)) return false;
+      const parsed = Utils.parseProjectName(s.projectName || '');
+      const cleanName = parsed.name || s.projectName || '';
+      const locSuffix = s.location ? `-${s.location}` : '';
+      return (cleanName + locSuffix) === row.e;
+    });
+  },
+
   renderDashboard() {
     const config = Storage.getConfig();
-    const submissions = Storage.getSubmissions();
+    const pendingRows = this._dashboardPendingRows || [];
 
     // 정보 바
     document.getElementById('info-deadline').textContent =
@@ -106,120 +141,148 @@ const AdminView = {
     document.getElementById('info-excel').textContent =
       Utils.describeDate(Utils.getNextExcelExportDate(config)) + ' ' + config.excelTime;
 
-    // 시공사 필터 옵션 갱신
+    // 시공사 필터 옵션: 납부대기 행에 등장하는 시공사들
     const contractorSelect = document.getElementById('filter-contractor');
     const currentVal = contractorSelect.value;
-    const contractors = Storage.getContractors();
+    const contractorSet = new Set(pendingRows.map(r => r.a).filter(Boolean));
+    const contractorList = [...contractorSet].sort();
     contractorSelect.innerHTML = '<option value="">전체 시공사</option>' +
-      contractors.map(c => `<option value="${c.id}">${c.name}</option>`).join('');
+      contractorList.map(c => `<option value="${this._esc(c)}">${this._esc(c)}</option>`).join('');
     contractorSelect.value = currentVal;
 
     // 필터 적용
     const fContractor = document.getElementById('filter-contractor').value;
-    const fStatus = document.getElementById('filter-status').value;
     const fSearch = document.getElementById('filter-search').value.trim().toLowerCase();
 
-    const filtered = submissions.filter(s => {
-      if (fContractor && s.contractor !== fContractor) return false;
-      const status = this.getEffectiveStatus(s);
-      if (fStatus && status !== fStatus) return false;
+    const filtered = pendingRows.filter(row => {
+      if (fContractor && row.a !== fContractor) return false;
       if (fSearch) {
-        const hay = `${s.projectId} ${s.projectName} ${s.customerNumber}`.toLowerCase();
+        const hay = `${row.b} ${row.e} ${row.j} ${row.a}`.toLowerCase();
         if (!hay.includes(fSearch)) return false;
       }
       return true;
     });
 
-    // 통계 (Q열 기반 상태 사용)
-    const pendingSubs = submissions.filter(s => this.getEffectiveStatus(s) === '처리예정');
-    const doneSubs   = submissions.filter(s => this.getEffectiveStatus(s) === '처리완료');
-    const pendingAmount = pendingSubs.reduce((sum, s) => sum + Utils.calcTotal(s.baseFee), 0);
-    // 전체 제출: 납부내역 시트 B열 건수 (로드 전이면 로컬 submissions 수 사용)
-    const totalCount = this._totalSheetCount > 0 ? this._totalSheetCount : submissions.length;
+    // 통계
+    const parseFee = v => Number(String(v || '').replace(/[^0-9.-]/g, '')) || 0;
+    const pendingAmount = pendingRows.reduce((sum, r) => {
+      const fee = parseFee(r.g);
+      return sum + fee + Math.round(fee * 0.1);
+    }, 0);
+    const doneCount = Object.keys(this._qStatusMap || {}).length;
+    const totalCount = this._totalSheetCount > 0 ? this._totalSheetCount : pendingRows.length;
 
     document.getElementById('stat-row').innerHTML = `
       <div class="stat"><div class="label">전체 제출</div><div class="value">${totalCount}건</div></div>
-      <div class="stat warning"><div class="label">처리예정</div><div class="value">${pendingSubs.length}건</div></div>
-      <div class="stat success"><div class="label">처리완료</div><div class="value">${doneSubs.length}건</div></div>
+      <div class="stat warning"><div class="label">처리예정</div><div class="value">${pendingRows.length}건</div></div>
+      <div class="stat success"><div class="label">처리완료</div><div class="value">${doneCount}건</div></div>
       <div class="stat primary"><div class="label">금주 청구금액</div><div class="value">${Utils.formatMoney(pendingAmount)}</div></div>
     `;
 
-    // 처리예정만 표시 (Q열 체크 or transferReceipt 있는 건은 숨김)
-    const pendingRows = [...filtered.filter(s => this.getEffectiveStatus(s) === '처리예정')]
-      .sort((a, b) => a.submittedAt.localeCompare(b.submittedAt));
-
     const tbody = document.getElementById('admin-tbody');
-    if (pendingRows.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="19" style="text-align:center;padding:40px;color:var(--muted);">처리예정 항목이 없습니다.</td></tr>`;
+    if (filtered.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="19" style="text-align:center;padding:40px;color:var(--muted);">납부대기 항목이 없습니다.</td></tr>`;
       return;
     }
 
-    // 같은 projectId 그룹화 — 다중 거점 표시 + 접수증 공유 fallback
+    // projectId 그룹화 (다중 거점 배지)
     const groupMap = {};
-    pendingRows.forEach(s => {
-      if (!groupMap[s.projectId]) groupMap[s.projectId] = { items: [], sharedAppReceipt: null };
-      groupMap[s.projectId].items.push(s);
-      if (!groupMap[s.projectId].sharedAppReceipt && s.files && (s.files.applicationReceipt || s.files.applicationReceiptUrl)) {
-        groupMap[s.projectId].sharedAppReceipt = {
-          applicationReceipt: s.files.applicationReceipt,
-          applicationReceiptUrl: s.files.applicationReceiptUrl,
-        };
-      }
+    filtered.forEach(row => {
+      const k = `${row.a}|${row.b}`;
+      if (!groupMap[k]) groupMap[k] = [];
+      groupMap[k].push(row);
     });
 
-    tbody.innerHTML = pendingRows.map(s => {
-      const vat   = Utils.calcVat(s.baseFee);
-      const total = Utils.calcTotal(s.baseFee);
+    // 각 행을 내부 sub 와 매칭 (파일 표시용)
+    const display = filtered.map(row => ({ row, sub: this._findMatchingSub(row) }));
 
-      const parsed = Utils.parseProjectName(s.projectName || '');
-      const displayName = parsed.round
-        ? `${parsed.name}_${parsed.round}차`
-        : (parsed.name || s.projectName || '-');
+    tbody.innerHTML = display.map(({ row, sub }) => {
+      const baseFee = parseFee(row.g);
+      const vat = Math.round(baseFee * 0.1);
+      const total = baseFee + vat;
 
-      const group     = groupMap[s.projectId];
-      const groupSize = group.items.length;
-      const myIdx     = group.items.indexOf(s) + 1;
+      // 프로젝트명 표시: 매칭된 sub 가 있으면 차수 포함, 없으면 시트 E값
+      let displayName = row.e || '-';
+      if (sub) {
+        const parsed = Utils.parseProjectName(sub.projectName || '');
+        displayName = parsed.round
+          ? `${parsed.name}_${parsed.round}차`
+          : (parsed.name || sub.projectName || row.e);
+      }
+
+      const groupKey = `${row.a}|${row.b}`;
+      const groupSize = (groupMap[groupKey] || []).length;
+      const myIdx = (groupMap[groupKey] || []).indexOf(row) + 1;
       const groupBadge = groupSize > 1
         ? ` <span class="loc-badge" title="같은 프로젝트 ${groupSize}개 거점 중 ${myIdx}번째">${myIdx}/${groupSize}거점</span>`
         : '';
 
-      const myHasAppRcpt = s.files && (s.files.applicationReceipt || s.files.applicationReceiptUrl);
-      let appRcptCell;
-      if (myHasAppRcpt) {
-        appRcptCell = this.fileCell(s, 'applicationReceipt');
-      } else if (group.sharedAppReceipt && groupSize > 1) {
-        const fakeFile = { files: group.sharedAppReceipt };
-        appRcptCell = this.fileCell(fakeFile, 'applicationReceipt') + ' <span class="muted" style="font-size:10px">(공유)</span>';
+      // 파일 셀 (sub 가 있으면 표시, 없으면 미연동)
+      const noFileCell = '<span class="file-missing">미연동</span>';
+      let appRcptCell, feeNoticeCell, transferReceiptCell;
+      if (sub) {
+        const hasAppRcpt = sub.files && (sub.files.applicationReceipt || sub.files.applicationReceiptUrl);
+        if (hasAppRcpt) {
+          appRcptCell = this.fileCell(sub, 'applicationReceipt');
+        } else {
+          // 같은 프로젝트의 다른 거점 sub에서 접수증 공유 탐색
+          const sameProjSub = (groupMap[groupKey] || [])
+            .map(r => this._findMatchingSub(r))
+            .filter(Boolean)
+            .find(s => s.files && (s.files.applicationReceipt || s.files.applicationReceiptUrl));
+          if (sameProjSub) {
+            appRcptCell = this.fileCell({ files: sameProjSub.files }, 'applicationReceipt') + ' <span class="muted" style="font-size:10px">(공유)</span>';
+          } else {
+            appRcptCell = '<span class="file-missing">없음</span>';
+          }
+        }
+        feeNoticeCell = this.fileCell(sub, 'feeNotice');
+        transferReceiptCell = this.fileCell(sub, 'transferReceipt', true);
       } else {
-        appRcptCell = '<span class="file-missing">없음</span>';
+        appRcptCell = feeNoticeCell = transferReceiptCell = noFileCell;
       }
 
-      const status = this.getEffectiveStatus(s);
+      const rowKey = String(row.rowNumber);
+      const submitDate = sub ? Utils.toYMD(new Date(sub.submittedAt)) : '-';
+      const scheduledDate = sub ? Utils.describeDate(sub.scheduledProcessDate) : '-';
+      const customer = row.j ? Utils.formatCustomerNumber(row.j) : '-';
+      const account = row.l ? Utils.formatAccountNumber(row.l) : '-';
+
+      // 비고 셀: 시트 R열 (sub 도 있으면 sub.notes 와 동기화되지만, 시트값이 최신)
+      const noteText = row.r || '';
+      const noteDisplay = noteText
+        ? (noteText.length > 12 ? this._esc(noteText.slice(0, 12)) + '…' : this._esc(noteText))
+        : '✏️ 추가';
+
+      // 액션: 행 번호 기반 (rowNumber 가 시트 식별자)
+      // 내부 sub 가 매칭되면 그 id 도 같이 전달 (파일 처리 위해)
+      const subIdAttr = sub ? `data-sub-id="${this._esc(sub.id)}"` : '';
+
       return `
-        <tr data-id="${s.id}">
-          <td style="text-align:center"><input type="checkbox" class="row-check" data-id="${s.id}"></td>
-          <td>${Utils.toYMD(new Date(s.submittedAt))}</td>
-          <td>${s.contractor}</td>
-          <td>${s.projectId}${groupBadge}</td>
-          <td>${displayName}</td>
-          <td>${s.capacity || '-'}</td>
-          <td>${Utils.formatCustomerNumber(s.customerNumber)}</td>
-          <td>${s.customerBank || '-'}</td>
-          <td>${Utils.formatAccountNumber(s.customerAccount)}</td>
-          <td class="num">${Utils.formatMoneyRaw(s.baseFee)}</td>
+        <tr data-row="${rowKey}" ${subIdAttr}>
+          <td style="text-align:center"><input type="checkbox" class="row-check" data-row="${rowKey}"></td>
+          <td>${submitDate}</td>
+          <td>${this._esc(row.a)}</td>
+          <td><code>${this._esc(row.b)}</code>${groupBadge}</td>
+          <td>${this._esc(displayName)}</td>
+          <td>${this._esc(row.f) || '-'}</td>
+          <td>${customer}</td>
+          <td>${this._esc(row.k) || '-'}</td>
+          <td>${account}</td>
+          <td class="num">${Utils.formatMoneyRaw(baseFee)}</td>
           <td class="num">${Utils.formatMoneyRaw(vat)}</td>
           <td class="num"><strong>${Utils.formatMoneyRaw(total)}</strong></td>
-          <td title="${(s.notes || '').replace(/"/g, '&quot;')}" style="cursor:pointer;color:${s.notes ? 'var(--primary)' : 'var(--muted)'}" onclick="AdminView.actionEditNotes('${s.id}')">${this.shortNote(s.notes)}</td>
+          <td title="${this._esc(noteText)}" style="cursor:pointer;color:${noteText ? 'var(--primary)' : 'var(--muted)'}"
+              onclick="AdminView.actionEditPendingNote(${rowKey})">${noteDisplay}</td>
           <td>${appRcptCell}</td>
-          <td>${this.fileCell(s, 'feeNotice')}</td>
-          <td>${this.fileCell(s, 'transferReceipt', true)}</td>
-          <td>${Utils.describeDate(s.scheduledProcessDate)}</td>
-          <td><span class="status-pill status-${status}">${status}</span></td>
+          <td>${feeNoticeCell}</td>
+          <td>${transferReceiptCell}</td>
+          <td>${scheduledDate}</td>
+          <td><span class="status-pill status-처리예정">처리예정</span></td>
           <td>
-            <button class="small" onclick="AdminView.actionConfirmComplete('${s.id}')">확인완료</button>
-            <button class="small btn-paid" onclick="AdminView.actionMarkPaid('${s.id}')">납부 완료</button>
-            <button class="small" onclick="AdminView.actionUploadTransfer('${s.id}')">이체증</button>
-            <button class="small" onclick="AdminView.actionDelete('${s.id}')">삭제</button>
+            <button class="small" onclick="AdminView.actionConfirmFromRow(${rowKey})">확인완료</button>
+            <button class="small btn-paid" onclick="AdminView.actionMarkPaidFromRow(${rowKey})">납부 완료</button>
+            <button class="small" onclick="AdminView.actionDeleteFromRow(${rowKey})">삭제</button>
           </td>
         </tr>
       `;
@@ -605,14 +668,179 @@ const AdminView = {
     return '처리예정';
   },
 
-  /** 체크된 행의 제출 ID 배열 반환 */
-  _getCheckedIds() {
-    return [...document.querySelectorAll('#admin-tbody .row-check:checked')].map(cb => cb.dataset.id);
+  /** 체크된 행의 납부대기 rowNumber 배열 반환 */
+  _getCheckedRowNumbers() {
+    return [...document.querySelectorAll('#admin-tbody .row-check:checked')]
+      .map(cb => Number(cb.dataset.row))
+      .filter(n => !isNaN(n) && n > 0);
   },
 
   /** 전체 선택/해제 */
   _toggleAllChecks(checked) {
     document.querySelectorAll('#admin-tbody .row-check').forEach(cb => { cb.checked = checked; });
+  },
+
+  /** 납부대기 행에서 sub-like 객체 빌드 (내부 sub 미매칭 시) */
+  _buildSubFromRow(row) {
+    // E열 포맷: "{name}-{N거점}" 또는 "{name}"
+    const eMatch = String(row.e || '').match(/^(.+?)-(\d+거점)$/);
+    return {
+      id: `pending-row-${row.rowNumber}`,
+      contractor: row.a,
+      submittedAt: new Date().toISOString(),
+      projectId: row.b,
+      projectName: eMatch ? eMatch[1] : row.e,
+      location: eMatch ? eMatch[2] : '',
+      capacity: row.f ? String(row.f).replace(/[^0-9.]/g, '') : '',
+      customerNumber: row.j || '',
+      customerBank: row.k || '',
+      customerAccount: row.l || '',
+      baseFee: Number(String(row.g || '').replace(/[^0-9.-]/g, '')) || 0,
+      notes: row.r || '',
+      scheduledProcessDate: '',
+      files: {},
+    };
+  },
+
+  /** 매칭되는 내부 sub 가 없는 납부대기 행을 시트만으로 처리 */
+  async _processUnmatchedRow(row) {
+    const cfg = Storage.getConfig();
+    if (!cfg.processingSheetUrl) return { ok: false, error: '처리 시트 미설정' };
+
+    const refData = await this._lookupBillingRef(row.b);
+    const processDate = Utils.getCurrentProcessDate(cfg);
+    const newRow = {
+      a: row.a || '',
+      b: row.b || '',
+      e: row.e || '',
+      f: row.f || '',
+      g: Number(String(row.g || '').replace(/[^0-9.-]/g, '')) || 0,
+      j: row.j || '',
+      k: row.k || '',
+      l: row.l || '',
+      m: refData.m, n: refData.n, o: refData.o,
+      p: Utils.toYMD(processDate),
+      r: row.r || '',
+    };
+    const r = await Sync.appendProcessingRow(
+      cfg.processingSheetUrl, cfg.processingSheetGid, cfg.processingSheetName,
+      newRow,
+    );
+    if (!r.ok) return r;
+
+    // 납부대기 행 삭제
+    await Sync.deletePendingRowMatching(
+      { a: row.a, b: row.b, e: row.e },
+      cfg.pendingSheetUrl || '', cfg.pendingSheetGid || '', cfg.pendingSheetName || '',
+    );
+    return r;
+  },
+
+  // ─── 대시보드 행 기반 액션 (납부대기 시트 기반) ───
+
+  /** 행 단위 확인완료: 매칭된 sub 가 있으면 기존 path, 없으면 시트만 이동 */
+  async actionConfirmFromRow(rowNumber) {
+    const row = (this._dashboardPendingRows || []).find(r => r.rowNumber === rowNumber);
+    if (!row) { alert('행을 찾을 수 없습니다.'); return; }
+    if (!confirm('이 항목을 확인완료 처리하시겠습니까?\n납부내역 시트에 기록되고 폴더에 저장됩니다.')) return;
+
+    const matchedSub = this._findMatchingSub(row);
+    if (matchedSub) {
+      await this.actionConfirmComplete(matchedSub.id, true);
+      // 결과 표시
+      await this._refreshDashboardData();
+      alert('✓ 확인완료 처리되었습니다.');
+    } else {
+      const r = await this._processUnmatchedRow(row);
+      await this._refreshDashboardData();
+      if (r && r.ok) alert('✓ 확인완료 처리되었습니다. (시트만 이동)');
+      else alert('처리 실패: ' + (r && r.error || '알 수 없음'));
+    }
+  },
+
+  /** 행 단위 납부 완료: 확인완료 + Q열 TRUE */
+  async actionMarkPaidFromRow(rowNumber) {
+    const row = (this._dashboardPendingRows || []).find(r => r.rowNumber === rowNumber);
+    if (!row) return;
+    if (!confirm('이 항목을 납부 완료 처리하시겠습니까?\n납부내역 시트에 기록 후 Q열(완료확인)이 체크됩니다.')) return;
+
+    const matchedSub = this._findMatchingSub(row);
+    if (matchedSub) {
+      await this.actionConfirmComplete(matchedSub.id, true);
+    } else {
+      const r = await this._processUnmatchedRow(row);
+      if (!r || !r.ok) { alert('처리 실패: ' + (r && r.error || '')); return; }
+    }
+
+    // 새로 추가된 납부내역 행 찾아 Q=TRUE
+    const cfg = Storage.getConfig();
+    await this.loadQStatus();
+    const rowNumbers = this._sheetRowMap[row.b] || [];
+    if (rowNumbers.length > 0) {
+      const newestRow = Math.max(...rowNumbers);
+      await Sync.updateQStatus(
+        cfg.processingSheetUrl, cfg.processingSheetGid, cfg.processingSheetName,
+        [newestRow], true,
+      );
+      this._qStatusMap[row.b] = true;
+    }
+    await this._refreshDashboardData();
+    alert('✓ 납부 완료 처리되었습니다.');
+  },
+
+  /** 행 단위 삭제: 납부대기 행 + 내부 sub(매칭 시) */
+  async actionDeleteFromRow(rowNumber) {
+    const row = (this._dashboardPendingRows || []).find(r => r.rowNumber === rowNumber);
+    if (!row) return;
+    if (!confirm('이 행을 삭제하시겠습니까?\n납부대기 시트 행과 (있는 경우) 내부 제출 데이터가 모두 삭제됩니다.')) return;
+
+    const matchedSub = this._findMatchingSub(row);
+    if (matchedSub) {
+      if (matchedSub.files) {
+        for (const [key, fId] of Object.entries(matchedSub.files)) {
+          if (fId && !key.endsWith('Url')) await FileDB.delete(fId).catch(() => {});
+        }
+      }
+      Storage.deleteSubmission(matchedSub.id);
+      if (Sync.enabled()) await Sync.deleteSubmissionRemote(matchedSub.id);
+    }
+
+    await Sync.deletePendingRowMatching(
+      { a: row.a, b: row.b, e: row.e },
+      '', '', '',
+    );
+    await this._refreshDashboardData();
+  },
+
+  /** 납부대기 행 R열(비고) 수정 */
+  async actionEditPendingNote(rowNumber) {
+    const row = (this._dashboardPendingRows || []).find(r => r.rowNumber === rowNumber);
+    if (!row) return;
+    const newNote = prompt('비고 입력:', row.r || '');
+    if (newNote === null) return;
+    const cfg = Storage.getConfig();
+    const r = await Sync.updateProcessingNote(
+      rowNumber, newNote,
+      cfg.pendingSheetUrl || '', cfg.pendingSheetGid || '', cfg.pendingSheetName || '',
+    );
+    if (!r.ok) { alert('비고 저장 실패: ' + (r.error || '')); return; }
+    row.r = newNote;
+    // 매칭 내부 sub 도 동기화
+    const matchedSub = this._findMatchingSub(row);
+    if (matchedSub) {
+      Storage.updateSubmission(matchedSub.id, { notes: newNote });
+      if (Sync.enabled()) await Sync.updateSubmission(matchedSub.id, { notes: newNote });
+    }
+    this.renderDashboard();
+  },
+
+  /** 대시보드 데이터 새로고침 (Q 상태 + 납부대기 + 렌더) */
+  async _refreshDashboardData() {
+    await Promise.all([
+      this.loadQStatus(),
+      this.loadDashboardPending(),
+    ]);
+    this.renderDashboard();
   },
 
   // ============ 납부 완료 / 일괄 처리 ============
@@ -657,58 +885,69 @@ const AdminView = {
 
   /**
    * 선택된 항목 일괄 확인완료 (납부내역 시트 기록 + 폴더 저장)
+   * - 납부대기 시트 기반: 체크된 rowNumber 단위로 처리
    * - 시트 기록: 거점별로 수행
-   * - 폴더 저장: 프로젝트별 1회만 수행 (중복 파일 방지)
+   * - 폴더 저장: 프로젝트별 1회만 수행
    */
   async actionBatchConfirm() {
-    const ids = this._getCheckedIds();
-    if (ids.length === 0) { alert('선택된 항목이 없습니다.'); return; }
-    if (!confirm(`선택된 ${ids.length}건을 일괄 확인완료 처리하시겠습니까?\n납부내역 시트에 기록하고 폴더에 저장합니다.`)) return;
+    const rowNumbers = this._getCheckedRowNumbers();
+    if (rowNumbers.length === 0) { alert('선택된 항목이 없습니다.'); return; }
+    if (!confirm(`선택된 ${rowNumbers.length}건을 일괄 확인완료 처리하시겠습니까?\n납부내역 시트에 기록하고 폴더에 저장합니다.`)) return;
 
     const btn = document.getElementById('btn-batch-confirm');
     const origText = btn ? btn.textContent : '';
     if (btn) btn.disabled = true;
 
-    const submissions = Storage.getSubmissions();
     const today = new Date(); today.setHours(0, 0, 0, 0);
+    const pendingMap = {};
+    (this._dashboardPendingRows || []).forEach(r => { pendingMap[r.rowNumber] = r; });
 
     let recorded = 0, recordFail = 0;
     let projectCount = 0;
     let driveSaved = 0, driveFailed = 0, localSaved = 0;
     let driveConfigured = false, localConfigured = false;
+    const seenProjects = new Set();
 
     // 1단계: 거점별 시트 기록
-    for (let i = 0; i < ids.length; i++) {
-      if (btn) btn.textContent = `⏳ 시트 기록 ${i + 1}/${ids.length}...`;
-      const sub = submissions.find(s => s.id === ids[i]);
-      if (!sub) continue;
+    for (let i = 0; i < rowNumbers.length; i++) {
+      if (btn) btn.textContent = `⏳ 시트 기록 ${i + 1}/${rowNumbers.length}...`;
+      const row = pendingMap[rowNumbers[i]];
+      if (!row) continue;
       try {
-        const patch = { scheduledProcessDate: today.toISOString() };
-        Storage.updateSubmission(sub.id, patch);
-        if (Sync.enabled()) await Sync.updateSubmission(sub.id, patch);
-        await this.uploadNotesTxt(sub);
-        await this.recordToProcessingSheet(sub);
+        const matchedSub = this._findMatchingSub(row);
+        if (matchedSub) {
+          const patch = { scheduledProcessDate: today.toISOString() };
+          Storage.updateSubmission(matchedSub.id, patch);
+          if (Sync.enabled()) await Sync.updateSubmission(matchedSub.id, patch);
+          await this.uploadNotesTxt(matchedSub);
+          await this.recordToProcessingSheet(matchedSub);
+        } else {
+          // 시트만 이동
+          const r = await this._processUnmatchedRow(row);
+          if (!r || !r.ok) throw new Error(r && r.error || 'unknown');
+        }
         recorded++;
       } catch (e) {
         recordFail++;
-        console.error('일괄 시트 기록 오류', ids[i], e);
+        console.error('일괄 시트 기록 오류', rowNumbers[i], e);
       }
     }
 
-    // 2단계: 프로젝트별 폴더 저장 (1회만)
-    const seenProjects = new Set();
-    for (let i = 0; i < ids.length; i++) {
-      const sub = submissions.find(s => s.id === ids[i]);
-      if (!sub) continue;
-      const key = `${sub.contractor}|${sub.projectId}`;
+    // 2단계: 프로젝트별 폴더 저장 (매칭 sub 가 있는 항목만)
+    for (let i = 0; i < rowNumbers.length; i++) {
+      const row = pendingMap[rowNumbers[i]];
+      if (!row) continue;
+      const matchedSub = this._findMatchingSub(row);
+      if (!matchedSub) continue;
+      const key = `${matchedSub.contractor}|${matchedSub.projectId}`;
       if (seenProjects.has(key)) continue;
       seenProjects.add(key);
       projectCount++;
       if (btn) btn.textContent = `⏳ 폴더 저장 ${seenProjects.size}...`;
       try {
         const [dr, lr] = await Promise.all([
-          this.copyToProcessedFolder(sub),
-          this.copyToLocalFolder(sub),
+          this.copyToProcessedFolder(matchedSub),
+          this.copyToLocalFolder(matchedSub),
         ]);
         if (dr && dr.ok) {
           driveConfigured = true;
@@ -720,13 +959,12 @@ const AdminView = {
           localSaved += lr.saved || 0;
         }
       } catch (e) {
-        console.error('일괄 폴더 저장 오류', ids[i], e);
+        console.error('일괄 폴더 저장 오류', rowNumbers[i], e);
       }
     }
 
-    await this.loadQStatus();
     if (btn) { btn.disabled = false; btn.textContent = origText; }
-    this.renderDashboard();
+    await this._refreshDashboardData();
 
     const saveLines = [];
     if (driveConfigured) saveLines.push(`☁️ Drive 폴더: ${driveSaved}개 저장${driveFailed > 0 ? ` (실패 ${driveFailed})` : ''}`);
@@ -737,11 +975,11 @@ const AdminView = {
   },
 
   /**
-   * 선택된 항목 일괄 납부 완료 (Q열 = TRUE)
+   * 선택된 항목 일괄 납부 완료 — 확인완료 + Q열 TRUE
    */
   async actionBatchMarkPaid() {
-    const ids = this._getCheckedIds();
-    if (ids.length === 0) { alert('선택된 항목이 없습니다.'); return; }
+    const rowNumbers = this._getCheckedRowNumbers();
+    if (rowNumbers.length === 0) { alert('선택된 항목이 없습니다.'); return; }
 
     const cfg = Storage.getConfig();
     if (!Sync.enabled() || !cfg.processingSheetUrl) {
@@ -749,40 +987,65 @@ const AdminView = {
       return;
     }
 
-    if (!confirm(`선택된 ${ids.length}건을 납부 완료로 표시하시겠습니까?\n해당 항목이 대시보드에서 숨겨집니다.`)) return;
-
-    const submissions = Storage.getSubmissions();
-    const allRowNumbers = [];
-    const updatedPids = new Set();
-
-    for (const id of ids) {
-      const sub = submissions.find(s => s.id === id);
-      if (!sub || updatedPids.has(sub.projectId)) continue;
-      updatedPids.add(sub.projectId);
-      (this._sheetRowMap[sub.projectId] || []).forEach(n => allRowNumbers.push(n));
-    }
-
-    if (allRowNumbers.length === 0) {
-      alert('납부내역 시트에 해당 프로젝트 행이 없습니다.\n먼저 "일괄 입력 및 저장"을 실행해주세요.');
-      return;
-    }
+    if (!confirm(`선택된 ${rowNumbers.length}건을 납부 완료 처리하시겠습니까?\n납부내역 시트에 기록 후 Q열(완료확인) 모두 체크됩니다.`)) return;
 
     const btn = document.getElementById('btn-batch-paid');
     const origText = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = '⏳ 처리 중...'; }
 
-    const r = await Sync.updateQStatus(cfg.processingSheetUrl, cfg.processingSheetGid, cfg.processingSheetName, allRowNumbers, true);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const pendingMap = {};
+    (this._dashboardPendingRows || []).forEach(r => { pendingMap[r.rowNumber] = r; });
 
-    if (btn) { btn.disabled = false; btn.textContent = origText; }
+    let recorded = 0, recordFail = 0;
+    const targetPids = new Set();
 
-    if (!r.ok) {
-      alert(`납부 완료 처리 실패: ${r.error}`);
-      return;
+    // 1단계: 확인완료 처리 (시트 이동)
+    for (let i = 0; i < rowNumbers.length; i++) {
+      if (btn) btn.textContent = `⏳ 시트 기록 ${i + 1}/${rowNumbers.length}...`;
+      const row = pendingMap[rowNumbers[i]];
+      if (!row) continue;
+      try {
+        const matchedSub = this._findMatchingSub(row);
+        if (matchedSub) {
+          const patch = { scheduledProcessDate: today.toISOString() };
+          Storage.updateSubmission(matchedSub.id, patch);
+          if (Sync.enabled()) await Sync.updateSubmission(matchedSub.id, patch);
+          await this.uploadNotesTxt(matchedSub);
+          await this.recordToProcessingSheet(matchedSub);
+        } else {
+          const r = await this._processUnmatchedRow(row);
+          if (!r || !r.ok) throw new Error(r && r.error || 'unknown');
+        }
+        targetPids.add(row.b);
+        recorded++;
+      } catch (e) {
+        recordFail++;
+        console.error('일괄 납부완료(시트 기록) 오류', rowNumbers[i], e);
+      }
     }
 
-    updatedPids.forEach(pid => { this._qStatusMap[pid] = true; });
-    this.renderDashboard();
-    alert(`✓ ${updatedPids.size}개 프로젝트 납부 완료 처리됨`);
+    // 2단계: Q열 TRUE 일괄 설정
+    if (btn) btn.textContent = '⏳ Q열 체크 중...';
+    await this.loadQStatus();
+    const allRowNumbers = [];
+    targetPids.forEach(pid => {
+      (this._sheetRowMap[pid] || []).forEach(n => allRowNumbers.push(n));
+    });
+
+    let qOk = false;
+    if (allRowNumbers.length > 0) {
+      const r = await Sync.updateQStatus(
+        cfg.processingSheetUrl, cfg.processingSheetGid, cfg.processingSheetName,
+        allRowNumbers, true,
+      );
+      qOk = !!(r && r.ok);
+      if (qOk) targetPids.forEach(pid => { this._qStatusMap[pid] = true; });
+    }
+
+    if (btn) { btn.disabled = false; btn.textContent = origText; }
+    await this._refreshDashboardData();
+    alert(`✓ 일괄 납부 완료\n\n시트 기록: ${recorded}건${recordFail ? ` (실패 ${recordFail})` : ''}\nQ열 체크: ${qOk ? targetPids.size + '개 프로젝트' : '실패'}`);
   },
 
   shortNote(notes) {
@@ -935,8 +1198,8 @@ const AdminView = {
     }
 
     if (!silent) {
-      // Q 상태 맵에 새로 추가된 행 반영
-      await this.loadQStatus();
+      // Q 상태 + 납부대기 맵에 새로 추가된 행 반영
+      await Promise.all([this.loadQStatus(), this.loadDashboardPending()]);
       this.renderDashboard();
       alert('✓ 확인완료 처리되었습니다.\n\n' + this._formatSaveSummary(driveResult, localResult));
     }

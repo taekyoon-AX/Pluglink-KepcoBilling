@@ -73,11 +73,13 @@ const AdminView = {
     this.renderDashboard();
     this.renderSettings();
 
-    // 납부대기 + Q열 상태 비동기 로드 → 완료 시 대시보드 재렌더링
-    Promise.all([
+    // 초기 데이터: 시공사 제출 동기화 + 납부대기 + Q열 상태 비동기 로드
+    const initTasks = [
       this.loadDashboardPending(),
       this.loadQStatus(),
-    ]).then(() => this.renderDashboard()).catch(e => console.warn('대시보드 로드 실패:', e));
+    ];
+    if (Sync.enabled()) initTasks.push(Sync.pull().catch(e => console.warn('초기 Sync.pull 실패:', e)));
+    Promise.all(initTasks).then(() => this.renderDashboard()).catch(e => console.warn('대시보드 초기 로드 실패:', e));
 
     // 자동 엑셀 출력 체크
     this.checkAutoExcelExport();
@@ -182,7 +184,7 @@ const AdminView = {
 
     const tbody = document.getElementById('admin-tbody');
     if (filtered.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="19" style="text-align:center;padding:40px;color:var(--muted);">납부대기 항목이 없습니다.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="18" style="text-align:center;padding:40px;color:var(--muted);">납부대기 항목이 없습니다.</td></tr>`;
       return;
     }
 
@@ -220,7 +222,7 @@ const AdminView = {
 
       // 파일 셀 (sub 가 있으면 표시, 없으면 미연동)
       const noFileCell = '<span class="file-missing">미연동</span>';
-      let appRcptCell, feeNoticeCell, transferReceiptCell;
+      let appRcptCell, feeNoticeCell;
       if (sub) {
         const hasAppRcpt = sub.files && (sub.files.applicationReceipt || sub.files.applicationReceiptUrl);
         if (hasAppRcpt) {
@@ -238,9 +240,8 @@ const AdminView = {
           }
         }
         feeNoticeCell = this.fileCell(sub, 'feeNotice');
-        transferReceiptCell = this.fileCell(sub, 'transferReceipt', true);
       } else {
-        appRcptCell = feeNoticeCell = transferReceiptCell = noFileCell;
+        appRcptCell = feeNoticeCell = noFileCell;
       }
 
       const rowKey = String(row.rowNumber);
@@ -277,7 +278,6 @@ const AdminView = {
               onclick="AdminView.actionEditPendingNote(${rowKey})">${noteDisplay}</td>
           <td>${appRcptCell}</td>
           <td>${feeNoticeCell}</td>
-          <td>${transferReceiptCell}</td>
           <td>${scheduledDate}</td>
           <td><span class="status-pill status-처리예정">처리예정</span></td>
           <td>
@@ -840,12 +840,15 @@ const AdminView = {
     this.renderDashboard();
   },
 
-  /** 대시보드 데이터 새로고침 (Q 상태 + 납부대기 + 렌더) */
+  /** 대시보드 데이터 새로고침 (내부 submissions sync + Q 상태 + 납부대기 + 렌더) */
   async _refreshDashboardData() {
-    await Promise.all([
+    // 시공사 제출(접수증/고지서 파일 참조 포함)을 서버에서 가져와야 매칭됨
+    const tasks = [
       this.loadQStatus(),
       this.loadDashboardPending(),
-    ]);
+    ];
+    if (Sync.enabled()) tasks.push(Sync.pull().catch(e => console.warn('Sync.pull 실패:', e)));
+    await Promise.all(tasks);
     this.renderDashboard();
   },
 

@@ -987,22 +987,40 @@ function deletePendingRowMatching(sheetUrl, gid, sheetName, match) {
     var nrm = function (s) { return String(s || '').replace(/\s+/g, '').toLowerCase(); };
     var targetA = nrm(match.a);
     var targetB = nrm(match.b);
-    var targetE = match.e == null ? null : nrm(match.e); // E는 옵션
-
+    var targetE = match.e == null ? null : nrm(match.e);
     var DATA_START_ROW = 4;
-    for (var r = DATA_START_ROW - 1; r < data.length; r++) {
-      var row = data[r];
-      var a = nrm(row[0]);
-      var b = nrm(row[1]);
-      var e = nrm(row[4]);
-      if (!b) continue;
-      if (targetB && b !== targetB) continue;
-      if (targetA && a !== targetA) continue;
-      if (targetE != null && e !== targetE) continue;
-      // 매칭 — 삭제
-      sheet.deleteRow(r + 1);
-      return { ok: true, deleted: 1, rowNumber: r + 1 };
+
+    // 1차: A + B + E 정확 매칭
+    if (targetE) {
+      for (var r = DATA_START_ROW - 1; r < data.length; r++) {
+        var row = data[r];
+        var a = nrm(row[0]);
+        var b = nrm(row[1]);
+        var e = nrm(row[4]);
+        if (!b) continue;
+        if (targetB && b !== targetB) continue;
+        if (targetA && a !== targetA) continue;
+        if (e !== targetE) continue;
+        sheet.deleteRow(r + 1);
+        return { ok: true, deleted: 1, rowNumber: r + 1, matchedBy: 'A+B+E' };
+      }
     }
+
+    // 2차 폴백: A + B (+ E 부분일치) — 차수 포함/미포함 등 E 포맷이 달라도 매칭
+    for (var r2 = DATA_START_ROW - 1; r2 < data.length; r2++) {
+      var row2 = data[r2];
+      var a2 = nrm(row2[0]);
+      var b2 = nrm(row2[1]);
+      var e2 = nrm(row2[4]);
+      if (!b2) continue;
+      if (targetB && b2 !== targetB) continue;
+      if (targetA && a2 !== targetA) continue;
+      // E 부분일치도 허용 (서로 한쪽이 차수 suffix 만 다른 경우)
+      if (targetE && e2 && !(e2 === targetE || e2.indexOf(targetE) >= 0 || targetE.indexOf(e2) >= 0)) continue;
+      sheet.deleteRow(r2 + 1);
+      return { ok: true, deleted: 1, rowNumber: r2 + 1, matchedBy: targetE ? 'A+B+E(partial)' : 'A+B' };
+    }
+
     return { ok: true, deleted: 0 };
   } catch (err) {
     return { ok: false, error: err.toString() };

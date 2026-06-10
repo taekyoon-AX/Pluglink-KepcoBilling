@@ -1144,18 +1144,23 @@ const AdminView = {
     console.log(`✓ 처리 시트 ${r.sheet} ${r.rowNumber}행 추가 (${sub.projectId}${locSuffix})`);
 
     // 납부내역 기록 성공 → 납부대기에서 같은 행 삭제 (best-effort)
-    if (cfg.pendingSheetUrl) {
-      try {
-        const delRes = await Sync.deletePendingRowMatching(
-          { a: sub.contractor || '', b: sub.projectId, e: cleanName + locSuffix },
-          cfg.pendingSheetUrl, cfg.pendingSheetGid, cfg.pendingSheetName,
-        );
-        if (delRes.ok && delRes.deleted > 0) {
-          console.log(`✓ 납부대기 ${delRes.rowNumber}행 삭제`);
-        }
-      } catch (e) {
-        console.warn('납부대기 삭제 실패:', e);
+    // URL이 로컬에 없어도 서버 저장 설정으로 시도
+    try {
+      const delRes = await Sync.deletePendingRowMatching(
+        { a: sub.contractor || '', b: sub.projectId, e: cleanName + locSuffix },
+        cfg.pendingSheetUrl || '', cfg.pendingSheetGid || '', cfg.pendingSheetName || '',
+      );
+      if (!delRes) {
+        console.warn('납부대기 삭제: 응답 없음');
+      } else if (!delRes.ok) {
+        console.warn('납부대기 삭제 실패:', delRes.error);
+      } else if (delRes.deleted > 0) {
+        console.log(`✓ 납부대기 ${delRes.rowNumber}행 삭제 (matched ${delRes.matchedBy || 'A+B+E'})`);
+      } else {
+        console.log(`납부대기에서 매칭 행 없음 (${sub.projectId} · ${sub.contractor})`);
       }
+    } catch (e) {
+      console.warn('납부대기 삭제 예외:', e);
     }
   },
 

@@ -456,9 +456,10 @@ const ContractorView = {
       if (Sync.enabled()) {
         try {
           const d = item.data;
-          // 현장명: parseProjectName 으로 정제 + 거점 suffix
+          // 현장명: admin recordToProcessingSheet 와 동일한 포맷 (차수 제외, 거점만 suffix)
+          // → 차수까지 포함하면 admin 측 매칭 실패로 납부대기 삭제가 안 되므로 동일하게 맞춤
           const parsed = Utils.parseProjectName(d.projectName || '');
-          const cleanName = parsed.round ? `${parsed.name}_${parsed.round}차` : (parsed.name || d.projectName || '');
+          const cleanName = parsed.name || d.projectName || '';
           const locSuffix = d.location ? `-${d.location}` : '';
           const pendingRow = {
             a: auth.name || auth.id,            // A = 시공사 (서버에서 강제 덮어씀)

@@ -60,8 +60,9 @@ const App = {
     const btn = document.getElementById('btn-login');
     errEl.textContent = '';
 
-    if (!id || !pw) {
-      errEl.textContent = '아이디와 비밀번호를 입력하세요.';
+    // 비밀번호 비활성화: 아이디만 입력해도 통과
+    if (!id) {
+      errEl.textContent = '아이디를 입력하세요.';
       return;
     }
     btn.disabled = true;

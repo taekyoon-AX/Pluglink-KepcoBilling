@@ -67,11 +67,12 @@
         <span>아이디</span>
         <input type="text" id="login-id" placeholder="시공사 또는 관리자 아이디" />
       </label>
-      <label>
+      <label style="display:none">
         <span>비밀번호</span>
         <input type="password" id="login-pw" placeholder="비밀번호" />
       </label>
       <button id="btn-login" class="primary">로그인</button>
+      <p class="muted" style="font-size:11px;text-align:center;margin-top:6px;">비밀번호 인증이 비활성화된 상태입니다.</p>
       <p id="login-error" class="error"></p>
       <details class="hint">
         <summary>테스트 계정 보기</summary>
@@ -365,6 +366,13 @@
           <div style="margin-top:8px;">
             <button id="btn-central-test">🔌 시공사별 매칭 테스트</button>
             <span id="central-test-status" class="muted"></span>
+          </div>
+          <div style="margin-top:14px;border-top:1px dashed var(--border);padding-top:10px;">
+            <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;">대시보드 펼치기 — 프로젝트 상세 컬럼</label>
+            <p class="muted" style="font-size:12px;margin-bottom:6px;">
+              대시보드 행을 펼쳤을 때 표시할 중앙 시트의 컬럼들. 한 줄에 하나씩, <code>컬럼letter:라벨</code> 형식. 비워두면 기본값(G:프로젝트명 / H:도로명 주소 / I:시공사) 사용.
+            </p>
+            <textarea id="cfg-project-detail-cols" rows="4" placeholder="G:프로젝트명&#10;H:도로명 주소&#10;I:시공사&#10;J:지번 주소" style="width:100%;font-family:monospace;font-size:12px;padding:6px;border:1px solid var(--border);border-radius:6px;"></textarea>
           </div>
         </div>
 

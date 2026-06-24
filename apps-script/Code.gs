@@ -268,11 +268,12 @@ function _verifyToken(token) {
 }
 
 function login(id, pw) {
-  if (!id || !pw) return { ok: false, error: '아이디/비밀번호를 입력하세요.' };
+  // 비밀번호 체크 비활성화 — 아이디만 일치하면 로그인 (사용자 요청)
+  if (!id) return { ok: false, error: '아이디를 입력하세요.' };
   const accounts = _getAccounts();
   const acc = accounts[id];
-  if (!acc || acc.password !== pw) {
-    return { ok: false, error: '아이디 또는 비밀번호가 올바르지 않습니다.' };
+  if (!acc) {
+    return { ok: false, error: '존재하지 않는 아이디입니다.' };
   }
   const name = acc.name || id;
   const token = _makeToken(id, acc.role, name);

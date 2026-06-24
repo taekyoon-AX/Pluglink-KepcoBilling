@@ -265,7 +265,12 @@ const AdminView = {
           <td style="text-align:center"><input type="checkbox" class="row-check" data-row="${rowKey}"></td>
           <td>${submitDate}</td>
           <td>${this._esc(row.a)}</td>
-          <td><code>${this._esc(row.b)}</code>${groupBadge}</td>
+          <td>
+            <button class="expand-toggle" onclick="AdminView.actionToggleExpand(${rowKey}, this)"
+                    title="상세 정보 보기/숨기기"
+                    style="border:none;background:transparent;cursor:pointer;font-size:11px;color:var(--primary);padding:0 4px;">▶</button>
+            <code>${this._esc(row.b)}</code>${groupBadge}
+          </td>
           <td>${this._esc(displayName)}</td>
           <td>${this._esc(row.f) || '-'}</td>
           <td>${customer}</td>
@@ -686,6 +691,100 @@ const AdminView = {
     document.querySelectorAll('#admin-tbody .row-check').forEach(cb => { cb.checked = checked; });
   },
 
+  // ─── 프로젝트 상세 펼치기 ───
+
+  _projectDetailsCache: {},
+
+  _getProjectDetailCols() {
+    const cfg = Storage.getConfig();
+    const cols = cfg.projectDetailColumns;
+    if (Array.isArray(cols) && cols.length > 0) return cols;
+    return [
+      { col: 'G', label: '프로젝트명' },
+      { col: 'H', label: '도로명 주소' },
+      { col: 'I', label: '시공사' },
+    ];
+  },
+
+  async _fetchProjectDetails(projectId) {
+    if (!projectId) return null;
+    if (this._projectDetailsCache[projectId]) return this._projectDetailsCache[projectId];
+
+    const cfg = Storage.getConfig();
+    if (!Sync.enabled() || !cfg.centralProjectSheetUrl) return null;
+
+    const cols = this._getProjectDetailCols().map(c => c.col);
+    const r = await Sync.lookupCentralColumns(
+      cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
+      [String(projectId)], cols,
+    );
+    if (r.ok && r.map && r.map[projectId]) {
+      this._projectDetailsCache[projectId] = r.map[projectId];
+      return r.map[projectId];
+    }
+    return { __empty: true };
+  },
+
+  _renderProjectDetails(details) {
+    if (!details || details.__empty) {
+      return `
+        <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:10px;color:#92400e;font-size:13px;">
+          ⚠ 중앙 시트에서 해당 프로젝트 정보를 찾지 못했습니다.
+          <br><span style="font-size:11px;">설정 탭의 '중앙 프로젝트 시트' URL · 탭명을 확인하세요.</span>
+        </div>
+      `;
+    }
+    const cols = this._getProjectDetailCols();
+    const items = cols.map(c => {
+      const v = details[c.col];
+      const display = (v === null || v === undefined || v === '') ? '<span class="muted">-</span>' : this._esc(String(v));
+      return `<strong style="color:var(--muted);font-size:12px;">${this._esc(c.label)}</strong><span style="font-size:13px;">${display}</span>`;
+    }).join('');
+    return `
+      <div style="background:#f8fafc;border-left:3px solid var(--primary);padding:12px 16px;border-radius:0 6px 6px 0;">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;font-weight:600;">📋 프로젝트 상세 정보</div>
+        <div style="display:grid;grid-template-columns:auto 1fr auto 1fr;gap:8px 20px;align-items:baseline;">
+          ${items}
+        </div>
+      </div>
+    `;
+  },
+
+  async actionToggleExpand(rowNumber, btn) {
+    const tr = document.querySelector(`#admin-tbody tr[data-row="${rowNumber}"]`);
+    if (!tr) return;
+    const next = tr.nextElementSibling;
+    if (next && next.classList.contains('detail-row') && next.dataset.detailFor === String(rowNumber)) {
+      next.remove();
+      if (btn) btn.textContent = '▶';
+      return;
+    }
+    if (btn) btn.textContent = '▼';
+
+    const row = (this._dashboardPendingRows || []).find(r => r.rowNumber === rowNumber);
+    if (!row) return;
+
+    const detailTr = document.createElement('tr');
+    detailTr.classList.add('detail-row');
+    detailTr.dataset.detailFor = String(rowNumber);
+    detailTr.innerHTML = `<td colspan="18" style="background:#f8fafc;padding:14px;">⏳ 상세 정보 로딩 중...</td>`;
+    tr.parentNode.insertBefore(detailTr, tr.nextSibling);
+
+    const details = await this._fetchProjectDetails(row.b);
+    detailTr.firstElementChild.innerHTML = this._renderProjectDetails(details);
+  },
+
+  /** 납부대기 행의 비고(R열)를 매칭 sub.notes 로 동기화 — 처리 전 호출 */
+  async _syncRowNotesToSub(row, matchedSub) {
+    if (!matchedSub || row.r === undefined || row.r === null) return;
+    const cur = matchedSub.notes || '';
+    const rowR = String(row.r || '');
+    if (cur === rowR) return;
+    Storage.updateSubmission(matchedSub.id, { notes: rowR });
+    if (Sync.enabled()) await Sync.updateSubmission(matchedSub.id, { notes: rowR });
+    matchedSub.notes = rowR;
+  },
+
   /** 납부대기 행에서 sub-like 객체 빌드 (내부 sub 미매칭 시) */
   _buildSubFromRow(row) {
     // E열 포맷: "{name}-{N거점}" 또는 "{name}"
@@ -716,7 +815,7 @@ const AdminView = {
     const refData = await this._lookupBillingRef(row.b);
     const processDate = Utils.getCurrentProcessDate(cfg);
     const newRow = {
-      a: row.a || '',
+      // A열(시공사)은 납부내역으로 옮기지 않음 (사용자 요청)
       b: row.b || '',
       e: row.e || '',
       f: row.f || '',
@@ -752,8 +851,8 @@ const AdminView = {
 
     const matchedSub = this._findMatchingSub(row);
     if (matchedSub) {
+      await this._syncRowNotesToSub(row, matchedSub);
       await this.actionConfirmComplete(matchedSub.id, true);
-      // 결과 표시
       await this._refreshDashboardData();
       alert('✓ 확인완료 처리되었습니다.');
     } else {
@@ -772,6 +871,7 @@ const AdminView = {
 
     const matchedSub = this._findMatchingSub(row);
     if (matchedSub) {
+      await this._syncRowNotesToSub(row, matchedSub);
       await this.actionConfirmComplete(matchedSub.id, true);
     } else {
       const r = await this._processUnmatchedRow(row);
@@ -925,6 +1025,7 @@ const AdminView = {
       try {
         const matchedSub = this._findMatchingSub(row);
         if (matchedSub) {
+          await this._syncRowNotesToSub(row, matchedSub);
           const patch = { scheduledProcessDate: today.toISOString() };
           Storage.updateSubmission(matchedSub.id, patch);
           if (Sync.enabled()) await Sync.updateSubmission(matchedSub.id, patch);
@@ -1387,7 +1488,7 @@ const AdminView = {
     const refData = await this._lookupBillingRef(sub.projectId);
 
     const row = {
-      a: sub.contractor || '',             // A = 시공사
+      // A열(시공사)은 납부내역으로 옮기지 않음 (사용자 요청)
       b: sub.projectId,                    // B = 프로젝트ID (거점 suffix 없이)
       e: cleanName + locSuffix,            // E = 현장명 (-N거점)
       f: capacityVal,                      // F = 용량 (예: "30 kW")
@@ -1648,6 +1749,13 @@ const AdminView = {
     document.getElementById('cfg-central-gid').value = cfg.centralProjectSheetGid || '';
     document.getElementById('cfg-central-name').value = cfg.centralProjectSheetName || '';
 
+    // 프로젝트 상세 컬럼 (펼치기)
+    const detailColsEl = document.getElementById('cfg-project-detail-cols');
+    if (detailColsEl) {
+      const cols = cfg.projectDetailColumns || [];
+      detailColsEl.value = cols.map(c => `${c.col}:${c.label}`).join('\n');
+    }
+
     // M·N·O 참조 시트 (AU/AV/AW 출처)
     document.getElementById('cfg-billingref-url').value = cfg.billingRefSheetUrl || '';
     document.getElementById('cfg-billingref-gid').value = cfg.billingRefSheetGid || '';
@@ -1729,6 +1837,17 @@ const AdminView = {
     }
     cfg.centralProjectSheetGid = centralGid;
     cfg.centralProjectSheetName = document.getElementById('cfg-central-name').value.trim();
+
+    // 프로젝트 상세 컬럼 저장 (펼치기용)
+    const detailColsRaw = (document.getElementById('cfg-project-detail-cols')?.value || '').trim();
+    cfg.projectDetailColumns = detailColsRaw
+      ? detailColsRaw.split(/\r?\n/).map(line => {
+          const m = line.trim().match(/^([A-Za-z]+)\s*[:=]\s*(.+)$/);
+          return m ? { col: m[1].toUpperCase(), label: m[2].trim() } : null;
+        }).filter(Boolean)
+      : [];
+    // 프로젝트 상세 캐시 무효화 (컬럼 변경 가능성)
+    this._projectDetailsCache = {};
 
     // M·N·O 참조 시트 저장 (AU/AV/AW 출처)
     const billingRefUrl = document.getElementById('cfg-billingref-url').value.trim();

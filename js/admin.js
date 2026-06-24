@@ -699,10 +699,11 @@ const AdminView = {
     const cfg = Storage.getConfig();
     const cols = cfg.projectDetailColumns;
     if (Array.isArray(cols) && cols.length > 0) return cols;
+    // 기본값: PM_영차영차new 의 G(사업구분), X(계약합계), E(도로명주소)
     return [
-      { col: 'G', label: '프로젝트명' },
-      { col: 'H', label: '도로명 주소' },
-      { col: 'I', label: '시공사' },
+      { col: 'G', label: '사업구분' },
+      { col: 'X', label: '계약합계' },
+      { col: 'E', label: '도로명주소' },
     ];
   },
 
@@ -728,24 +729,54 @@ const AdminView = {
   _renderProjectDetails(details) {
     if (!details || details.__empty) {
       return `
-        <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:10px;color:#92400e;font-size:13px;">
+        <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:12px 16px;color:#92400e;font-size:13px;">
           ⚠ 중앙 시트에서 해당 프로젝트 정보를 찾지 못했습니다.
           <br><span style="font-size:11px;">설정 탭의 '중앙 프로젝트 시트' URL · 탭명을 확인하세요.</span>
         </div>
       `;
     }
     const cols = this._getProjectDetailCols();
+
+    // 금액 컬럼 자동 감지 (라벨에 '합계/금액/단가/총액' 또는 큰 수)
+    const isMoneyLabel = label => /(합계|금액|단가|총액|부담금)/.test(label || '');
+    const formatVal = (v, c) => {
+      if (v === null || v === undefined || v === '') return '<span class="muted">-</span>';
+      const isMoney = c.format === 'money' || isMoneyLabel(c.label);
+      if (isMoney) {
+        const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.-]/g, ''));
+        if (!isNaN(n) && n !== 0) {
+          return `<strong style="color:var(--primary);font-size:15px;">${n.toLocaleString('ko-KR')}</strong><span class="muted" style="margin-left:3px;font-size:12px;">원</span>`;
+        }
+      }
+      return this._esc(String(v));
+    };
+    const iconFor = label => {
+      if (/주소/.test(label)) return '📍';
+      if (/(합계|금액|단가|총액|부담금)/.test(label)) return '💰';
+      if (/(시공사|업체)/.test(label)) return '🏢';
+      if (/(사업|구분|종류)/.test(label)) return '🏷️';
+      if (/(프로젝트|현장)/.test(label)) return '📌';
+      if (/(번호|ID)/.test(label)) return '🔢';
+      if (/(일|날짜)/.test(label)) return '📅';
+      return '📄';
+    };
+
     const items = cols.map(c => {
-      const v = details[c.col];
-      const display = (v === null || v === undefined || v === '') ? '<span class="muted">-</span>' : this._esc(String(v));
-      return `<strong style="color:var(--muted);font-size:12px;">${this._esc(c.label)}</strong><span style="font-size:13px;">${display}</span>`;
-    }).join('');
-    return `
-      <div style="background:#f8fafc;border-left:3px solid var(--primary);padding:12px 16px;border-radius:0 6px 6px 0;">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;font-weight:600;">📋 프로젝트 상세 정보</div>
-        <div style="display:grid;grid-template-columns:auto 1fr auto 1fr;gap:8px 20px;align-items:baseline;">
-          ${items}
+      const icon = iconFor(c.label);
+      const valHtml = formatVal(details[c.col], c);
+      const isLong = /주소/.test(c.label);
+      return `
+        <div class="detail-card${isLong ? ' detail-card-wide' : ''}">
+          <div class="detail-card-label"><span class="detail-card-icon">${icon}</span>${this._esc(c.label)}</div>
+          <div class="detail-card-value">${valHtml}</div>
         </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="project-detail-panel">
+        <div class="project-detail-header">📋 프로젝트 상세 정보</div>
+        <div class="project-detail-grid">${items}</div>
       </div>
     `;
   },

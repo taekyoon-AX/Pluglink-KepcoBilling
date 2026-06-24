@@ -141,6 +141,69 @@ button.btn-paid:hover { background: #15803d; }
 .stat.warning .value { color: var(--warning); }
 .stat.primary .value { color: var(--primary); }
 
+/* ============= 프로젝트 상세 펼치기 ============= */
+.detail-row td { padding: 0 !important; background: transparent !important; }
+.project-detail-panel {
+  background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 100%);
+  border: 1px solid #c7d2fe;
+  border-left: 4px solid var(--primary);
+  border-radius: 0 10px 10px 0;
+  padding: 16px 20px;
+  margin: 6px 12px 10px 12px;
+  box-shadow: 0 2px 8px rgba(0, 102, 255, 0.06);
+}
+.project-detail-header {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 12px;
+  letter-spacing: 0.3px;
+  text-transform: none;
+}
+.project-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+.detail-card {
+  background: var(--surface);
+  border: 1px solid #e0e7ff;
+  border-radius: 8px;
+  padding: 10px 14px;
+  transition: all 0.15s;
+  min-height: 56px;
+}
+.detail-card:hover {
+  border-color: var(--primary);
+  box-shadow: 0 2px 6px rgba(0, 102, 255, 0.08);
+}
+.detail-card-wide {
+  grid-column: 1 / -1;
+}
+.detail-card-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 5px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.detail-card-icon { font-size: 13px; }
+.detail-card-value {
+  font-size: 14px;
+  color: var(--text);
+  font-weight: 500;
+  word-break: break-word;
+  line-height: 1.4;
+}
+.expand-toggle {
+  transition: transform 0.15s;
+  display: inline-block;
+  vertical-align: middle;
+}
+.expand-toggle:hover { color: var(--primary-dark) !important; }
+
 /* ============= 테이블 ============= */
 .table-wrap {
   background: var(--surface);

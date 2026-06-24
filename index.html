@@ -370,9 +370,10 @@
           <div style="margin-top:14px;border-top:1px dashed var(--border);padding-top:10px;">
             <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;">대시보드 펼치기 — 프로젝트 상세 컬럼</label>
             <p class="muted" style="font-size:12px;margin-bottom:6px;">
-              대시보드 행을 펼쳤을 때 표시할 중앙 시트의 컬럼들. 한 줄에 하나씩, <code>컬럼letter:라벨</code> 형식. 비워두면 기본값(G:프로젝트명 / H:도로명 주소 / I:시공사) 사용.
+              대시보드 행을 펼쳤을 때 표시할 중앙 시트의 컬럼들. 한 줄에 하나씩, <code>컬럼letter:라벨</code> 형식.
+              비워두면 기본값(<code>G:사업구분 / X:계약합계 / E:도로명주소</code>) 사용. 라벨에 '합계/금액/단가/총액' 포함 시 자동으로 원화 포맷 표시.
             </p>
-            <textarea id="cfg-project-detail-cols" rows="4" placeholder="G:프로젝트명&#10;H:도로명 주소&#10;I:시공사&#10;J:지번 주소" style="width:100%;font-family:monospace;font-size:12px;padding:6px;border:1px solid var(--border);border-radius:6px;"></textarea>
+            <textarea id="cfg-project-detail-cols" rows="4" placeholder="G:사업구분&#10;X:계약합계&#10;E:도로명주소" style="width:100%;font-family:monospace;font-size:12px;padding:6px;border:1px solid var(--border);border-radius:6px;"></textarea>
           </div>
         </div>
 

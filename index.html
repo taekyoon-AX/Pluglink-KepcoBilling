@@ -363,6 +363,15 @@
               <input type="text" id="cfg-central-name" placeholder="PM_영차영차new" />
             </label>
           </div>
+          <div style="margin-top:10px;display:grid;grid-template-columns:200px 1fr;gap:8px;align-items:center;">
+            <label style="display:flex;flex-direction:column;gap:2px;">
+              <span style="font-size:12px;color:var(--muted);">대기번호 컬럼</span>
+              <input type="text" id="cfg-waiting-col" placeholder="예: A, F, K …" style="text-transform:uppercase" />
+            </label>
+            <p class="muted" style="font-size:11px;margin:0;">
+              고지서·이체증 파일명의 <code>(대기번호)</code>와 대시보드 펼치기의 '대기번호' 값을 가져올 컬럼. 비워두면 'A'.
+            </p>
+          </div>
           <div style="margin-top:8px;">
             <button id="btn-central-test">🔌 시공사별 매칭 테스트</button>
             <span id="central-test-status" class="muted"></span>

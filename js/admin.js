@@ -555,6 +555,26 @@ const AdminView = {
     const { PDFDocument } = window.PDFLib;
     const srcDoc = await PDFDocument.load(pdfBytes);
 
+    statusEl.textContent = '⏳ 대기번호 조회 중...';
+
+    // 대기번호 일괄 조회 (파일명에 사용)
+    const waitingCol = (cfg.waitingNumberColumn || 'A').toUpperCase();
+    const projIds = distributable.map(([p]) => p);
+    let waitingMap = {};
+    if (Sync.enabled() && cfg.centralProjectSheetUrl && projIds.length > 0) {
+      try {
+        const wr = await Sync.lookupCentralColumns(
+          cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
+          projIds, [waitingCol],
+        );
+        if (wr.ok && wr.map) {
+          Object.keys(wr.map).forEach(pid => {
+            waitingMap[pid] = wr.map[pid][waitingCol] || '';
+          });
+        }
+      } catch (e) { console.warn('대기번호 조회 실패:', e); }
+    }
+
     statusEl.textContent = '⏳ 분배 중...';
     let driveOk = 0, driveFail = 0, localOk = 0, localFail = 0;
     const errors = [];
@@ -574,14 +594,13 @@ const AdminView = {
         copied.forEach(p => newDoc.addPage(p));
         newPdfBytes = await newDoc.save();
 
-        // 폴더명 / 파일명 결정 (copyToProcessedFolder 와 동일한 로직)
+        // 폴더명 / 파일명 결정
         const groupSize = targetSubs.length;
         const rep = { ...targetSubs[0] };
         rep.location = groupSize > 1 ? `${groupSize}거점` : '';
         folderName = Utils.getProjectIdent(rep);
-        const today = new Date();
-        const dateStr = Utils.toYMD(today).replace(/-/g, '');
-        fileName = `이체증_${proj}_${dateStr}.pdf`;
+        // Utils.getFileName 사용: [ID]_[현장명]_[N차][-M거점]_이체증-한전불입금(대기번호)_YYYY-MM-DD.pdf
+        fileName = Utils.getFileName(rep, 'transferReceipt', 'transfer.pdf', { waitingNumber: waitingMap[proj] || '' });
       } catch (e) {
         errors.push(`${proj} (PDF 추출): ${e.message}`);
         console.error('Split PDF extract error', proj, e);
@@ -699,8 +718,10 @@ const AdminView = {
     const cfg = Storage.getConfig();
     const cols = cfg.projectDetailColumns;
     if (Array.isArray(cols) && cols.length > 0) return cols;
-    // 기본값: PM_영차영차new 의 G(사업구분), X(계약합계), E(도로명주소)
+    // 기본값: 대기번호 + PM_영차영차new 의 G(사업구분), X(계약합계), E(도로명주소)
+    const waitingCol = (cfg.waitingNumberColumn || 'A').toUpperCase();
     return [
+      { col: waitingCol, label: '대기번호' },
       { col: 'G', label: '사업구분' },
       { col: 'X', label: '계약합계' },
       { col: 'E', label: '도로명주소' },
@@ -751,6 +772,7 @@ const AdminView = {
       return this._esc(String(v));
     };
     const iconFor = label => {
+      if (/대기번호/.test(label)) return '🎫';
       if (/주소/.test(label)) return '📍';
       if (/(합계|금액|단가|총액|부담금)/.test(label)) return '💰';
       if (/(시공사|업체)/.test(label)) return '🏢';
@@ -883,7 +905,7 @@ const AdminView = {
     const matchedSub = this._findMatchingSub(row);
     if (matchedSub) {
       await this._syncRowNotesToSub(row, matchedSub);
-      await this.actionConfirmComplete(matchedSub.id, true);
+      await this.actionConfirmComplete(matchedSub.id, true, row);
       await this._refreshDashboardData();
       alert('✓ 확인완료 처리되었습니다.');
     } else {
@@ -903,7 +925,7 @@ const AdminView = {
     const matchedSub = this._findMatchingSub(row);
     if (matchedSub) {
       await this._syncRowNotesToSub(row, matchedSub);
-      await this.actionConfirmComplete(matchedSub.id, true);
+      await this.actionConfirmComplete(matchedSub.id, true, row);
     } else {
       const r = await this._processUnmatchedRow(row);
       if (!r || !r.ok) { alert('처리 실패: ' + (r && r.error || '')); return; }
@@ -1061,7 +1083,7 @@ const AdminView = {
           Storage.updateSubmission(matchedSub.id, patch);
           if (Sync.enabled()) await Sync.updateSubmission(matchedSub.id, patch);
           await this.uploadNotesTxt(matchedSub);
-          await this.recordToProcessingSheet(matchedSub);
+          await this.recordToProcessingSheet(matchedSub, row);
         } else {
           // 시트만 이동
           const r = await this._processUnmatchedRow(row);
@@ -1316,7 +1338,7 @@ const AdminView = {
    * 확인완료: 납부내역 시트에 기록하고 폴더에 저장
    * silent=true 이면 confirm 없이 실행 (일괄 처리 시 사용)
    */
-  async actionConfirmComplete(id, silent = false) {
+  async actionConfirmComplete(id, silent = false, pendingRow = null) {
     if (!silent && !confirm('이 항목을 확인완료 처리하시겠습니까?\n납부내역 시트에 기록되고 폴더에 저장됩니다.')) return;
 
     const today = new Date();
@@ -1329,7 +1351,7 @@ const AdminView = {
     let driveResult = null, localResult = null;
     if (sub) {
       await this.uploadNotesTxt(sub);
-      await this.recordToProcessingSheet(sub);
+      await this.recordToProcessingSheet(sub, pendingRow);
       const [dr, lr] = await Promise.all([
         this.copyToProcessedFolder(sub),
         this.copyToLocalFolder(sub),
@@ -1478,7 +1500,7 @@ const AdminView = {
    * J=고객번호, K=은행, L=고객지정계좌, P=처리날짜
    * 다중 거점이면 B·E 값 뒤에 "-N거점" 자동 추가
    */
-  async recordToProcessingSheet(sub) {
+  async recordToProcessingSheet(sub, pendingRow = null) {
     if (!Sync.enabled()) return;
     const cfg = Storage.getConfig();
     if (!cfg.processingSheetUrl) return;
@@ -1514,9 +1536,13 @@ const AdminView = {
     // F열 용량: 값이 있으면 뒤에 ' kW' 단위 추가
     const capacityVal = sub.capacity ? `${sub.capacity} kW` : '';
 
-    // M·N·O열 값 조회 → 전용 참조 시트(PM_25년환경부입찰)에서 지정 컬럼 가져옴
-    // 참조 시트 미설정 시 중앙 시트로 폴백
+    // M·N·O열 값: 납부대기 행에 이미 값이 있으면 그대로 (밀림 방지),
+    // 없을 때만 참조 시트 lookup 값으로 채움.
     const refData = await this._lookupBillingRef(sub.projectId);
+    const pickMNO = (pendingVal, refVal) => {
+      const p = pendingVal === undefined || pendingVal === null ? '' : String(pendingVal).trim();
+      return p !== '' ? pendingVal : refVal;
+    };
 
     const row = {
       // A열(시공사)은 납부내역으로 옮기지 않음 (사용자 요청)
@@ -1528,9 +1554,9 @@ const AdminView = {
       j: sub.customerNumber || '',         // J = 고객번호
       k: sub.customerBank || '',           // K = 은행
       l: sub.customerAccount || '',        // L = 고객지정계좌
-      m: refData.m,                        // M = 참조 시트 (기본 AU)
-      n: refData.n,                        // N = 참조 시트 (기본 AV)
-      o: refData.o,                        // O = 참조 시트 (기본 AW)
+      m: pickMNO(pendingRow && pendingRow.m, refData.m), // M
+      n: pickMNO(pendingRow && pendingRow.n, refData.n), // N
+      o: pickMNO(pendingRow && pendingRow.o, refData.o), // O
       p: ymd,                              // P = 처리날짜
       r: sub.notes || '',                  // R = 비고
     };
@@ -1779,6 +1805,8 @@ const AdminView = {
     document.getElementById('cfg-central-url').value = cfg.centralProjectSheetUrl || '';
     document.getElementById('cfg-central-gid').value = cfg.centralProjectSheetGid || '';
     document.getElementById('cfg-central-name').value = cfg.centralProjectSheetName || '';
+    const waitingColEl = document.getElementById('cfg-waiting-col');
+    if (waitingColEl) waitingColEl.value = cfg.waitingNumberColumn || '';
 
     // 프로젝트 상세 컬럼 (펼치기)
     const detailColsEl = document.getElementById('cfg-project-detail-cols');
@@ -1868,6 +1896,12 @@ const AdminView = {
     }
     cfg.centralProjectSheetGid = centralGid;
     cfg.centralProjectSheetName = document.getElementById('cfg-central-name').value.trim();
+
+    // 대기번호 컬럼
+    const waitingColRaw = (document.getElementById('cfg-waiting-col')?.value || '').trim().toUpperCase();
+    cfg.waitingNumberColumn = waitingColRaw.replace(/[^A-Z]/g, '') || 'A';
+    // 프로젝트 상세 캐시 무효화 (대기번호 컬럼 변경 가능성)
+    this._projectDetailsCache = {};
 
     // 프로젝트 상세 컬럼 저장 (펼치기용)
     const detailColsRaw = (document.getElementById('cfg-project-detail-cols')?.value || '').trim();
@@ -2308,14 +2342,16 @@ const AdminView = {
     }
 
     // ── 고지서: 모든 거점 수집 후 병합 ──
-    // 고지서 파일명에 대기번호가 필요할 때만 중앙시트 조회 (속도 최적화)
+    // 고지서·이체증 파일명에 대기번호가 필요할 때만 중앙시트 조회
+    const waitingCol = (cfg.waitingNumberColumn || 'A').toUpperCase();
     const feeNoticeSubs = sameProject.filter(s => s.files && (s.files.feeNotice || s.files.feeNoticeUrl));
-    if (feeNoticeSubs.length > 0 && cfg.centralProjectSheetUrl) {
+    const transferSubsPresent = sameProject.some(s => s.files && (s.files.transferReceipt || s.files.transferReceiptUrl));
+    if ((feeNoticeSubs.length > 0 || transferSubsPresent) && cfg.centralProjectSheetUrl) {
       const r = await Sync.lookupCentralColumns(
         cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
-        [sub.projectId], ['A']
+        [sub.projectId], [waitingCol]
       );
-      if (r.ok && r.map[sub.projectId]) extra = { waitingNumber: r.map[sub.projectId].A || '' };
+      if (r.ok && r.map[sub.projectId]) extra = { waitingNumber: r.map[sub.projectId][waitingCol] || '' };
     }
     if (feeNoticeSubs.length === 1) {
       // 단일 → Drive 직접 복사 (빠름, 다운로드 불필요)
@@ -2745,6 +2781,7 @@ const AdminView = {
     try {
       // 1) 중앙 시트에서 대기번호 lookup
       let centralMap = {};
+      const zipWaitingCol = (cfg.waitingNumberColumn || 'A').toUpperCase();
       if (Sync.enabled() && cfg.centralProjectSheetUrl) {
         btn.textContent = '⏳ 중앙 시트 조회 중...';
         const projectIds = [...new Set(submissions.map(s => s.projectId))];
@@ -2753,7 +2790,7 @@ const AdminView = {
           cfg.centralProjectSheetGid,
           cfg.centralProjectSheetName,
           projectIds,
-          ['A'],
+          [zipWaitingCol],
         );
         if (r.ok) centralMap = r.map || {};
       }
@@ -2785,7 +2822,7 @@ const AdminView = {
         rep.location = groupSize > 1 ? `${groupSize}거점` : '';
 
         const folder = Utils.getFolderPath(rep);
-        const waitingNumber = (centralMap[pid] && centralMap[pid].A) || '';
+        const waitingNumber = (centralMap[pid] && centralMap[pid][zipWaitingCol]) || '';
         const extra = { waitingNumber };
 
         // docType 별 처리

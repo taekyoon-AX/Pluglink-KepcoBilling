@@ -385,11 +385,15 @@ const Utils = {
       return `${idPart}_${namePart}${roundSuffix}${locPart}_시설부담금고지서${wn}.${ext}`;
     }
     if (docType === 'transferReceipt') {
-      // 이체증_한국전력공사_[ID]_25년환경부_[현장명]_[N]차[-M거점]_[YYYYMMDD]
+      // [ID]_[현장명]_[N차][-M거점]_이체증-한전불입금(대기번호)_YYYY-MM-DD
       const today = new Date();
-      const dateStr = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
-      const roundLabel = round ? `_${round}차` : '';
-      return `이체증_한국전력공사_${idPart}_25년환경부_${namePart}${roundLabel}${locPart}_${dateStr}.${ext}`;
+      const y = today.getFullYear();
+      const mo = String(today.getMonth() + 1).padStart(2, '0');
+      const d = String(today.getDate()).padStart(2, '0');
+      const dateStr = `${y}-${mo}-${d}`;
+      const wnRaw = extra.waitingNumber ? String(extra.waitingNumber).replace(/[^0-9]/g, '') : '';
+      const wn = wnRaw ? `(${wnRaw.padStart(4, '0')})` : '';
+      return `${idPart}_${namePart}${roundSuffix}${locPart}_이체증-한전불입금${wn}_${dateStr}.${ext}`;
     }
     if (docType === 'notes') {
       return `${idPart}_${namePart}${roundSuffix}${locPart}_비고.${ext}`;

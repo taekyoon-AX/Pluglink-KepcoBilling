@@ -69,6 +69,12 @@ const AdminView = {
     if (batchPaidBtn) batchPaidBtn.onclick = () => this.actionBatchMarkPaid();
     const chkAll = document.getElementById('chk-all');
     if (chkAll) chkAll.onchange = (e) => this._toggleAllChecks(e.target.checked);
+    // 체크박스 상태 변경 시 선택 개수 표시
+    document.getElementById('admin-tbody').addEventListener('change', (e) => {
+      if (e.target.classList && e.target.classList.contains('row-check')) {
+        this._updateBatchCount();
+      }
+    });
 
     this.renderDashboard();
     this.renderSettings();
@@ -285,10 +291,10 @@ const AdminView = {
           <td>${feeNoticeCell}</td>
           <td>${scheduledDate}</td>
           <td><span class="status-pill status-처리예정">처리예정</span></td>
-          <td>
-            <button class="small" onclick="AdminView.actionConfirmFromRow(${rowKey})">확인완료</button>
-            <button class="small btn-paid" onclick="AdminView.actionMarkPaidFromRow(${rowKey})">납부 완료</button>
-            <button class="small" onclick="AdminView.actionDeleteFromRow(${rowKey})">삭제</button>
+          <td class="row-actions">
+            <button class="row-btn primary" onclick="AdminView.actionConfirmFromRow(${rowKey})" title="확인완료 (납부내역 이동 + 폴더 저장)">✓ 확인</button>
+            <button class="row-btn btn-paid" onclick="AdminView.actionMarkPaidFromRow(${rowKey})" title="확인완료 + Q열 체크">✅ 납부</button>
+            <button class="row-btn ghost" onclick="AdminView.actionDeleteFromRow(${rowKey})" title="삭제">🗑</button>
           </td>
         </tr>
       `;
@@ -708,6 +714,16 @@ const AdminView = {
   /** 전체 선택/해제 */
   _toggleAllChecks(checked) {
     document.querySelectorAll('#admin-tbody .row-check').forEach(cb => { cb.checked = checked; });
+    this._updateBatchCount();
+  },
+
+  /** 선택된 항목 개수 배지 갱신 */
+  _updateBatchCount() {
+    const el = document.getElementById('batch-count');
+    if (!el) return;
+    const n = this._getCheckedRowNumbers().length;
+    el.textContent = n > 0 ? `${n}건 선택` : '';
+    el.classList.toggle('has-count', n > 0);
   },
 
   // ─── 프로젝트 상세 펼치기 ───

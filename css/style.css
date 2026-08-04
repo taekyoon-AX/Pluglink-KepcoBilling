@@ -125,18 +125,118 @@ button.btn-paid:hover { background: #15803d; }
 .panel-header h2 { font-size: 18px; margin-bottom: 4px; }
 .panel-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .panel-actions input, .panel-actions select {
-  padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px;
+  background: var(--surface); transition: border-color .15s, box-shadow .15s;
+}
+.panel-actions input:focus, .panel-actions select:focus {
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.1);
 }
 .muted { color: var(--muted); font-size: 12px; }
 
-/* ============= 통계 ============= */
-.stat-row { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
-.stat {
-  background: var(--surface); padding: 14px 18px; border-radius: 8px;
-  border: 1px solid var(--border); min-width: 140px;
+/* ============= 정돈된 툴바 ============= */
+.dashboard-toolbar, .contractor-toolbar {
+  display: flex; align-items: center; gap: 16px;
+  flex-wrap: wrap;
 }
-.stat .label { font-size: 12px; color: var(--muted); }
-.stat .value { font-size: 20px; font-weight: 600; margin-top: 2px; }
+.toolbar-group {
+  display: flex; align-items: center; gap: 6px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+}
+.toolbar-group.toolbar-filters { flex: 1 1 280px; min-width: 280px; }
+.toolbar-group.toolbar-actions { flex: 0 0 auto; }
+.toolbar-group > button {
+  padding: 6px 12px; font-size: 13px; border-radius: 6px;
+  border: 1px solid transparent; background: transparent;
+}
+.toolbar-group > button:hover { background: var(--surface); border-color: var(--border); }
+.toolbar-group > button.primary { background: var(--primary); color: white; border-color: var(--primary); }
+.toolbar-group > button.primary:hover { background: var(--primary-dark); }
+.toolbar-group > button.ghost { color: var(--muted); }
+.toolbar-select {
+  border: none !important; background: transparent !important;
+  padding: 6px 10px !important; font-size: 13px !important;
+  min-width: 140px; box-shadow: none !important;
+}
+.toolbar-search {
+  border: none !important; background: transparent !important;
+  padding: 6px 10px !important; font-size: 13px !important;
+  min-width: 200px; flex: 1; box-shadow: none !important;
+}
+.icon-btn {
+  width: 34px; height: 34px; padding: 0 !important;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 15px; border-radius: 6px !important;
+  background: transparent; border: 1px solid transparent !important;
+  color: var(--muted);
+}
+.icon-btn:hover { background: var(--surface) !important; color: var(--primary); border-color: var(--border) !important; }
+
+/* ============= 배치 액션 바 ============= */
+.batch-bar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 14px; margin-bottom: 6px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+.batch-select-all {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; cursor: pointer; user-select: none;
+  color: var(--text); font-weight: 500;
+}
+.batch-select-all input { cursor: pointer; }
+.batch-count {
+  display: none; margin-left: 4px; padding: 2px 8px;
+  background: var(--primary); color: white; border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+}
+.batch-count.has-count { display: inline-block; }
+.batch-buttons {
+  display: flex; gap: 6px; margin-left: auto;
+}
+.batch-buttons button {
+  padding: 6px 12px; font-size: 13px; font-weight: 500;
+}
+
+/* ============= 행 액션 버튼 ============= */
+.row-actions { white-space: nowrap; }
+.row-actions .row-btn {
+  padding: 4px 10px; font-size: 12px; margin: 0 2px;
+  border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface); font-weight: 500;
+}
+.row-actions .row-btn.primary {
+  background: var(--primary); color: white; border-color: var(--primary);
+}
+.row-actions .row-btn.primary:hover { background: var(--primary-dark); }
+.row-actions .row-btn.btn-paid {
+  background: var(--success); color: white; border-color: var(--success);
+}
+.row-actions .row-btn.btn-paid:hover { background: #15803d; }
+.row-actions .row-btn.ghost {
+  background: transparent; border-color: transparent; color: var(--muted);
+  padding: 4px 8px;
+}
+.row-actions .row-btn.ghost:hover { background: #fee2e2; color: var(--danger); }
+
+/* ============= 통계 ============= */
+.stat-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px; margin-bottom: 18px;
+}
+.stat {
+  background: var(--surface); padding: 14px 18px; border-radius: 10px;
+  border: 1px solid var(--border);
+  transition: transform .15s, box-shadow .15s;
+}
+.stat:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(15, 28, 46, 0.06); }
+.stat .label { font-size: 12px; color: var(--muted); font-weight: 500; }
+.stat .value { font-size: 22px; font-weight: 700; margin-top: 4px; letter-spacing: -0.3px; }
 .stat.success .value { color: var(--success); }
 .stat.warning .value { color: var(--warning); }
 .stat.primary .value { color: var(--primary); }
@@ -207,10 +307,11 @@ button.btn-paid:hover { background: #15803d; }
 /* ============= 테이블 ============= */
 .table-wrap {
   background: var(--surface);
-  border-radius: 8px;
+  border-radius: 10px;
   border: 1px solid var(--border);
   overflow-x: auto;
   overflow-y: visible;
+  box-shadow: 0 1px 3px rgba(15, 28, 46, 0.03);
 }
 .data-table {
   width: 100%;
@@ -222,31 +323,34 @@ button.btn-paid:hover { background: #15803d; }
 .data-table th, .data-table td {
   padding: 0 14px;
   text-align: left;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid #eef2f7;
   white-space: nowrap;
   vertical-align: middle;
-  height: 56px;
-  line-height: 56px;
+  height: 52px;
+  line-height: 52px;
   box-sizing: border-box;
 }
 .data-table th {
-  height: 44px;
-  line-height: 44px;
+  height: 42px;
+  line-height: 42px;
   background: #f8fafc;
   font-weight: 600;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   position: sticky; top: 0;
   z-index: 1;
+  border-bottom: 1px solid var(--border);
 }
 .data-table tbody tr {
-  height: 56px;
+  height: 52px;
+  transition: background .12s;
 }
 .data-table tbody tr:last-child td { border-bottom: none; }
-.data-table tbody tr:nth-child(even) { background: #fafbfd; }
-.data-table tbody tr:hover { background: #eff6ff; }
+.data-table tbody tr:hover { background: #f8fbff; }
+.data-table tbody tr.detail-row { background: transparent; }
+.data-table tbody tr.detail-row:hover { background: transparent; }
 .data-table .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -265,11 +369,12 @@ button.btn-paid:hover { background: #15803d; }
   vertical-align: middle;
 }
 .status-pill {
-  display: inline-block; padding: 2px 8px; border-radius: 10px;
-  font-size: 11px; font-weight: 600;
+  display: inline-block; padding: 3px 10px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
 }
 .status-처리예정 { background: #fef3c7; color: #92400e; }
 .status-처리완료 { background: #dcfce7; color: #166534; }
+.status-납부대기 { background: #dbeafe; color: #1e40af; }
 
 /* ============= 파일 버튼 ============= */
 .file-btn {
@@ -302,11 +407,21 @@ button.btn-paid:hover { background: #15803d; }
 }
 .submit-grid label span.req::after { content: " *"; color: var(--danger); }
 .submit-grid input, .submit-grid select {
-  width: 100%; padding: 7px 9px; font-size: 13px;
-  border: 1px solid var(--border); border-radius: 5px;
+  width: 100%; padding: 9px 11px; font-size: 13px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface);
+  transition: border-color .15s, box-shadow .15s, background .15s;
 }
-.submit-grid input:focus { outline: none; border-color: var(--primary); }
-.submit-grid input[readonly] { background: #f8fafc; color: var(--muted); }
+.submit-grid input:focus, .submit-grid select:focus {
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.12);
+  background: white;
+}
+.submit-grid input:hover:not([readonly]) { border-color: #94a3b8; }
+.submit-grid input[readonly] { background: #f1f5f9; color: var(--muted); cursor: default; }
+.submit-grid input::placeholder { color: #cbd5e1; }
+.submit-grid label span.req { color: var(--text); font-weight: 500; }
+.submit-grid label span.req::after { content: " *"; color: var(--danger); font-weight: 700; }
 .file-input-wrap {
   display: flex; align-items: center; gap: 6px;
   padding: 6px 9px; border: 1px dashed var(--border);
@@ -338,34 +453,40 @@ button.btn-paid:hover { background: #15803d; }
 /* ============= 프로젝트 블록 / 거점 ============= */
 .project-block {
   background: var(--surface);
-  border: 2px solid var(--border);
+  border: 1px solid var(--border);
   border-left: 4px solid var(--primary);
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 3px rgba(15, 28, 46, 0.04);
+  transition: box-shadow .15s;
 }
+.project-block:hover { box-shadow: 0 2px 8px rgba(15, 28, 46, 0.08); }
 .project-head { grid-template-columns: repeat(4, 1fr); }
 .loc-list {
-  display: flex; flex-direction: column; gap: 8px;
-  margin-top: 14px; padding-top: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+  margin-top: 14px; padding-top: 14px;
   border-top: 1px dashed var(--border);
 }
 .loc-row {
   background: var(--primary-soft);
   border: 1px solid #CFE0FF;
-  border-radius: 6px;
-  padding: 10px 12px;
+  border-radius: 8px;
+  padding: 12px 14px;
 }
 .loc-head {
   display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 .loc-num {
   font-size: 12px; font-weight: 600;
   color: var(--primary);
-  background: white; padding: 2px 10px; border-radius: 10px;
+  background: white; padding: 3px 10px; border-radius: 999px;
   border: 1px solid #CFE0FF;
 }
 .loc-grid { grid-template-columns: repeat(4, 1fr); }
 .loc-add-bar {
-  margin-top: 10px;
+  margin-top: 12px;
   display: flex; justify-content: flex-end;
 }
 

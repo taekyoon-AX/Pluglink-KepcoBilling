@@ -118,31 +118,34 @@
             엑셀 통합 정리: <strong id="info-excel"></strong>
           </p>
         </div>
-        <div class="panel-actions">
-          <select id="filter-contractor"><option value="">전체 시공사</option></select>
-          <select id="filter-status">
-            <option value="">전체 상태</option>
-            <option value="처리예정">처리예정</option>
-            <option value="처리완료">처리완료</option>
-          </select>
-          <input type="text" id="filter-search" placeholder="프로젝트 ID / 고객번호 검색" />
-          <button id="btn-refresh-dashboard">🔄 새로고침</button>
-          <button id="btn-export-excel" class="primary">📊 엑셀 통합 다운로드</button>
-          <button id="btn-export-zip">📁 파일 ZIP 다운로드</button>
-          <button id="btn-split-transfer" class="primary">📤 통합 이체증 일괄 분리</button>
+        <div class="panel-actions dashboard-toolbar">
+          <div class="toolbar-group toolbar-filters">
+            <select id="filter-contractor" class="toolbar-select"><option value="">전체 시공사</option></select>
+            <input type="text" id="filter-search" class="toolbar-search" placeholder="🔎  프로젝트ID · 현장명 · 고객번호" />
+            <button id="btn-refresh-dashboard" class="icon-btn" title="새로고침">🔄</button>
+          </div>
+          <div class="toolbar-group toolbar-actions">
+            <button id="btn-export-excel" title="엑셀 다운로드">📊 엑셀</button>
+            <button id="btn-export-zip" title="파일 ZIP 다운로드">📁 ZIP</button>
+            <button id="btn-split-transfer" class="primary" title="통합 이체증 일괄 분리">📤 이체증 분리</button>
+          </div>
+          <!-- 상태 필터 (미사용 — 대시보드는 모두 처리예정) -->
+          <select id="filter-status" style="display:none"><option value="">전체 상태</option></select>
         </div>
       </div>
 
       <div class="stat-row" id="stat-row"></div>
 
       <!-- 배치 액션 바 -->
-      <div id="batch-action-bar" style="display:flex;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid var(--border);margin-bottom:4px;flex-wrap:wrap;">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;user-select:none;">
-          <input type="checkbox" id="chk-all"> 전체 선택
+      <div id="batch-action-bar" class="batch-bar">
+        <label class="batch-select-all">
+          <input type="checkbox" id="chk-all"> <span>전체 선택</span>
+          <span id="batch-count" class="batch-count"></span>
         </label>
-        <button id="btn-batch-confirm" class="small primary">📋 일괄 입력 및 저장</button>
-        <button id="btn-batch-paid" class="small btn-paid">✅ 일괄 납부 완료</button>
-        <span class="muted" style="font-size:12px">← 체크 후 일괄 처리 버튼 클릭</span>
+        <div class="batch-buttons">
+          <button id="btn-batch-confirm" class="primary" title="선택 항목을 확인완료 (시트 기록 + 폴더 저장)">✓ 확인완료</button>
+          <button id="btn-batch-paid" class="btn-paid" title="선택 항목 확인완료 + Q열 체크">✅ 납부 완료</button>
+        </div>
       </div>
 
       <div class="table-wrap">
@@ -548,11 +551,15 @@
           </p>
           <p class="muted" id="contractor-project-source" style="margin-top:4px"></p>
         </div>
-        <div class="panel-actions">
-          <button id="btn-add-row" class="primary">+ 프로젝트 추가</button>
-          <button id="btn-import-excel">📥 엑셀 일괄 업로드</button>
-          <button id="btn-download-template" class="ghost">📄 양식 다운로드</button>
-          <button id="btn-submit-all" class="primary strong">📤 일괄 제출</button>
+        <div class="panel-actions contractor-toolbar">
+          <div class="toolbar-group">
+            <button id="btn-download-template" class="ghost" title="엑셀 양식 다운로드">📄 양식</button>
+            <button id="btn-import-excel" title="엑셀 일괄 업로드">📥 엑셀 업로드</button>
+          </div>
+          <div class="toolbar-group">
+            <button id="btn-add-row">+ 프로젝트 추가</button>
+            <button id="btn-submit-all" class="primary strong">📤 일괄 제출</button>
+          </div>
         </div>
       </div>
       <input type="file" id="excel-import-input" accept=".xlsx,.xls" style="display:none" />

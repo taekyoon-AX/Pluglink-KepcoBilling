@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>한전불입금 관리 시스템 - Pluglink</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <!-- SheetJS for Excel export -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- JSZip for zipped file download -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <!-- jsPDF for image-to-PDF conversion -->
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <!-- pdf-lib for PDF merging/splitting -->
+  <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <!-- PDF.js for text extraction -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>if (window.pdfjsLib) { pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }</script>
+</head>
+<body>
+  <!-- PLUGLINK 로고 SVG 정의 (img/logo.png 저장 시 자동으로 이미지 우선 사용) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="logo-pluglink" viewBox="0 0 280 48">
+        <!-- P with integrated lightning bolt -->
+        <g font-family="'Arial Black', Impact, -apple-system, sans-serif" font-weight="900" font-style="italic" font-size="38" letter-spacing="-1">
+          <text x="0" y="36" fill="#0F1C2E">PLUG</text>
+          <text x="138" y="36" fill="#0066FF">LINK</text>
+        </g>
+        <!-- lightning accent bolt at bottom-left of P -->
+        <path d="M12 26 L4 40 L10 40 L6 48 L18 34 L12 34 Z" fill="#0066FF"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <!-- 은행 리스트 -->
+  <datalist id="bank-list">
+    <option value="신한"></option>
+    <option value="국민"></option>
+    <option value="우리"></option>
+    <option value="하나"></option>
+    <option value="농협"></option>
+    <option value="기업"></option>
+    <option value="SC제일"></option>
+    <option value="씨티"></option>
+    <option value="카카오뱅크"></option>
+    <option value="토스뱅크"></option>
+    <option value="케이뱅크"></option>
+    <option value="새마을금고"></option>
+    <option value="수협"></option>
+    <option value="우체국"></option>
+    <option value="신협"></option>
+  </datalist>
+
+  <!-- ============= 로그인 화면 ============= -->
+  <section id="view-login" class="view active">
+    <div class="login-box">
+      <div class="login-logo">
+        <img src="img/logo.png" alt="PLUGLINK" class="logo-img"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='inline-block';" />
+        <svg class="logo-svg"><use href="#logo-pluglink"/></svg>
+      </div>
+      <h1>한전불입금 관리 시스템</h1>
+      <p class="subtitle">시공사 입력 포털</p>
+      <label>
+        <span>아이디</span>
+        <input type="text" id="login-id" placeholder="시공사 또는 관리자 아이디" />
+      </label>
+      <label style="display:none">
+        <span>비밀번호</span>
+        <input type="password" id="login-pw" placeholder="비밀번호" />
+      </label>
+      <button id="btn-login" class="primary">로그인</button>
+      <p class="muted" style="font-size:11px;text-align:center;margin-top:6px;">비밀번호 인증이 비활성화된 상태입니다.</p>
+      <p id="login-error" class="error"></p>
+      <details class="hint">
+        <summary>테스트 계정 보기</summary>
+        <ul>
+          <li>관리자: <code>admin</code> / <code>pluglink1234</code></li>
+          <li>시공사1: <code>택윤컴퍼니1</code> / <code>ty1234</code></li>
+          <li>시공사2: <code>택윤컴퍼니2</code> / <code>ty5678</code></li>
+        </ul>
+      </details>
+    </div>
+  </section>
+
+  <!-- ============= 관리자 화면 ============= -->
+  <section id="view-admin" class="view">
+    <header class="topbar">
+      <div class="brand">
+        <img src="img/logo.png" alt="PLUGLINK" class="logo-img"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='inline-block';" />
+        <svg class="logo-svg"><use href="#logo-pluglink"/></svg>
+        <span class="brand-divider">|</span>
+        <span>한전불입금 관리</span>
+        <span class="badge admin">관리자</span>
+      </div>
+      <nav class="tabs">
+        <button class="tab active" data-tab="dashboard">대시보드</button>
+        <button class="tab" data-tab="projects">납부 이력</button>
+        <button class="tab" data-tab="settings">일정/계정 설정</button>
+      </nav>
+      <div class="right">
+        <span id="admin-user"></span>
+        <button id="btn-admin-logout" class="ghost">로그아웃</button>
+      </div>
+    </header>
+
+    <!-- 대시보드 -->
+    <main id="panel-dashboard" class="panel active">
+      <div class="panel-header">
+        <div>
+          <h2>전체 제출 현황</h2>
+          <p class="muted">
+            금주 마감: <strong id="info-deadline"></strong> ·
+            처리예정일: <strong id="info-process"></strong> ·
+            엑셀 통합 정리: <strong id="info-excel"></strong>
+          </p>
+        </div>
+        <div class="panel-actions dashboard-toolbar">
+          <div class="toolbar-group toolbar-filters">
+            <select id="filter-contractor" class="toolbar-select"><option value="">전체 시공사</option></select>
+            <input type="text" id="filter-search" class="toolbar-search" placeholder="🔎  프로젝트ID · 현장명 · 고객번호" />
+            <button id="btn-refresh-dashboard" class="icon-btn" title="새로고침">🔄</button>
+          </div>
+          <div class="toolbar-group toolbar-actions">
+            <button id="btn-export-excel" title="엑셀 다운로드">📊 엑셀</button>
+            <button id="btn-export-zip" title="파일 ZIP 다운로드">📁 ZIP</button>
+            <button id="btn-split-transfer" class="primary" title="통합 이체증 일괄 분리">📤 이체증 분리</button>
+          </div>
+          <!-- 상태 필터 (미사용 — 대시보드는 모두 처리예정) -->
+          <select id="filter-status" style="display:none"><option value="">전체 상태</option></select>
+        </div>
+      </div>
+
+      <div class="stat-row" id="stat-row"></div>
+
+      <!-- 배치 액션 바 -->
+      <div id="batch-action-bar" class="batch-bar">
+        <label class="batch-select-all">
+          <input type="checkbox" id="chk-all"> <span>전체 선택</span>
+          <span id="batch-count" class="batch-count"></span>
+        </label>
+        <div class="batch-buttons">
+          <button id="btn-batch-confirm" class="primary" title="선택 항목을 확인완료 (시트 기록 + 폴더 저장)">✓ 확인완료</button>
+          <button id="btn-batch-paid" class="btn-paid" title="선택 항목 확인완료 + Q열 체크">✅ 납부 완료</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th style="width:36px">선택</th>
+            <th>제출일</th>
+            <th>시공사</th>
+            <th>프로젝트ID</th>
+            <th>프로젝트명</th>
+            <th>용량</th>
+            <th>고객번호</th>
+            <th>은행</th>
+            <th>계좌번호</th>
+            <th>표준부담금</th>
+            <th>부가세</th>
+            <th>청구금액</th>
+            <th>비고</th>
+            <th>접수증</th>
+            <th>고지서</th>
+            <th>처리예정일</th>
+            <th>상태</th>
+            <th>액션</th>
+          </tr>
+        </thead>
+        <tbody id="admin-tbody"></tbody>
+      </table>
+      </div>
+    </main>
+
+    <!-- 납부 이력 -->
+    <main id="panel-projects" class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>납부 처리 이력</h2>
+          <p class="muted">TEST 시트에 기록된 처리완료 내역을 확인하고 수정할 수 있습니다.</p>
+        </div>
+        <div class="panel-actions">
+          <button id="btn-refresh-payment-history" class="primary">🔄 새로고침</button>
+        </div>
+      </div>
+      <div id="payment-history-status" style="padding:10px 0;color:var(--muted);font-size:13px;"></div>
+      <div class="table-wrap">
+        <table class="data-table compact" id="payment-history-table">
+          <thead>
+            <tr>
+              <th style="width:40px">행</th>
+              <th>시공사</th>
+              <th>프로젝트ID</th>
+              <th>현장명</th>
+              <th>용량</th>
+              <th>표준시설부담금</th>
+              <th>고객번호</th>
+              <th>은행</th>
+              <th>고객지정계좌</th>
+              <th>M열</th>
+              <th>N열</th>
+              <th>O열</th>
+              <th>처리날짜</th>
+              <th>비고</th>
+              <th style="width:52px">수정</th>
+            </tr>
+          </thead>
+          <tbody id="payment-history-tbody"></tbody>
+        </table>
+      </div>
+    </main>
+
+    <!-- 납부 이력 수정 모달 -->
+    <div id="payment-edit-modal-overlay" class="modal-overlay">
+      <div class="modal" style="max-width:540px">
+        <div class="modal-header">
+          <h3>납부 내역 수정 <span id="payment-edit-row-label" style="font-weight:normal;font-size:13px;color:var(--muted)"></span></h3>
+          <button id="payment-edit-close" class="ghost">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">프로젝트ID
+              <input id="pe-b" type="text" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">처리날짜
+              <input id="pe-p" type="date" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;grid-column:span 2">현장명
+              <input id="pe-e" type="text" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">용량
+              <input id="pe-f" type="text" placeholder="예: 30 kW" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">표준시설부담금
+              <input id="pe-g" type="number" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">고객번호
+              <input id="pe-j" type="text" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">은행
+              <input id="pe-k" type="text" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;grid-column:span 2">고객지정계좌
+              <input id="pe-l" type="text" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">M열
+              <input id="pe-m" type="text" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">N열
+              <input id="pe-n" type="text" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">O열
+              <input id="pe-o" type="text" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px;font-size:13px;grid-column:span 2">비고 (R열)
+              <textarea id="pe-r" rows="2" style="resize:vertical"></textarea>
+            </label>
+          </div>
+        </div>
+        <div class="modal-header" style="border-top:1px solid var(--border);border-radius:0 0 12px 12px;justify-content:flex-end;gap:8px">
+          <button id="btn-payment-edit-cancel" class="ghost">취소</button>
+          <button id="btn-payment-edit-save" class="primary">💾 저장</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 설정 -->
+    <main id="panel-settings" class="panel">
+      <div class="panel-header"><h2>일정 및 계정 설정</h2></div>
+
+      <div class="settings-grid">
+        <div class="card">
+          <h3>📅 입력 마감 / 처리 예정일</h3>
+          <label>
+            <span>금주 입력 마감 요일</span>
+            <select id="cfg-deadline-dow">
+              <option value="0">일요일</option><option value="1">월요일</option>
+              <option value="2">화요일</option><option value="3">수요일</option>
+              <option value="4">목요일</option><option value="5">금요일</option>
+              <option value="6">토요일</option>
+            </select>
+          </label>
+          <label><span>마감 시각</span><input type="time" id="cfg-deadline-time" /></label>
+          <label>
+            <span>처리 예정 요일</span>
+            <select id="cfg-process-dow">
+              <option value="0">일요일</option><option value="1">월요일</option>
+              <option value="2">화요일</option><option value="3">수요일</option>
+              <option value="4">목요일</option><option value="5">금요일</option>
+              <option value="6">토요일</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="card">
+          <h3>📊 엑셀 통합 정리</h3>
+          <label>
+            <span>엑셀 출력 요일</span>
+            <select id="cfg-excel-dow">
+              <option value="0">일요일</option><option value="1">월요일</option>
+              <option value="2">화요일</option><option value="3">수요일</option>
+              <option value="4">목요일</option><option value="5">금요일</option>
+              <option value="6">토요일</option>
+            </select>
+          </label>
+          <label><span>엑셀 출력 시각</span><input type="time" id="cfg-excel-time" /></label>
+          <p class="muted">설정된 요일/시각 이후 관리자가 접속하면 자동으로 엑셀 다운로드를 안내합니다.</p>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3>📁 처리완료 파일 저장 폴더</h3>
+          <p class="muted" style="margin-bottom:12px">
+            <strong>바로처리</strong> 또는 <strong>이체증 업로드</strong> 시,
+            해당 프로젝트의 첨부파일(접수증·고지서·이체증·비고)이
+            <code>[프로젝트ID]_[현장명]_[차수]차[-N거점]/</code> 하위 폴더로 자동 저장됩니다.
+          </p>
+
+          <!-- 로컬 폴더 (우선 적용) -->
+          <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px;margin-bottom:12px">
+            <div style="font-weight:600;color:#15803d;margin-bottom:6px">💻 로컬 폴더 (Windows PC 직접 저장)</div>
+            <p class="muted" style="margin:0 0 10px">폴더를 선택하면 처리 시 Google Drive 없이 PC에 직접 저장됩니다. Chrome / Edge 전용.</p>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <button id="btn-select-local-folder" class="primary">📂 폴더 선택</button>
+              <span id="local-folder-status" class="muted">미선택</span>
+              <button id="btn-clear-local-folder" class="ghost small" style="margin-left:auto">지우기</button>
+            </div>
+          </div>
+
+          <!-- Google Drive 폴더 (선택) -->
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px">
+            <div style="font-weight:600;color:#475569;margin-bottom:6px">☁️ Google Drive 폴더 (선택)</div>
+            <p class="muted" style="margin:0 0 10px">Apps Script 배포 계정이 이 폴더에 <strong>편집자 권한</strong>이 있어야 합니다. 로컬 폴더와 동시 저장 가능.</p>
+            <label>
+              <span>Google Drive 폴더 URL 또는 ID</span>
+              <input type="text" id="cfg-processed-folder" placeholder="https://drive.google.com/drive/folders/..." />
+            </label>
+            <div style="margin-top:8px;">
+              <button id="btn-folder-test">🔌 폴더 접근 테스트</button>
+              <span id="folder-test-status" class="muted"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3>📋 중앙 프로젝트 시트 (시공사별 자동 필터링)</h3>
+          <p class="muted" style="margin-bottom:10px">
+            모든 시공사가 공통으로 사용하는 중앙 프로젝트 시트. 로그인한 시공사 이름이 <code>시공사</code> 컬럼에 매칭되는 프로젝트만 표시됩니다.
+            필요 컬럼: <code>프로젝트ID</code>, <code>프로젝트명</code>, <code>시공사</code>
+          </p>
+          <div style="display:grid;grid-template-columns:1fr 180px 180px;gap:8px;">
+            <label>
+              <span>시트 URL</span>
+              <input type="text" id="cfg-central-url" placeholder="https://docs.google.com/spreadsheets/d/.../edit?gid=..." />
+            </label>
+            <label>
+              <span>GID (자동추출)</span>
+              <input type="text" id="cfg-central-gid" placeholder="684271779" />
+            </label>
+            <label>
+              <span>시트(탭)명</span>
+              <input type="text" id="cfg-central-name" placeholder="PM_영차영차new" />
+            </label>
+          </div>
+          <div style="margin-top:10px;display:grid;grid-template-columns:200px 1fr;gap:8px;align-items:center;">
+            <label style="display:flex;flex-direction:column;gap:2px;">
+              <span style="font-size:12px;color:var(--muted);">대기번호 컬럼</span>
+              <input type="text" id="cfg-waiting-col" placeholder="예: A, F, K …" style="text-transform:uppercase" />
+            </label>
+            <p class="muted" style="font-size:11px;margin:0;">
+              고지서·이체증 파일명의 <code>(대기번호)</code>와 대시보드 펼치기의 '대기번호' 값을 가져올 컬럼. 비워두면 'A'.
+            </p>
+          </div>
+          <div style="margin-top:8px;">
+            <button id="btn-central-test">🔌 시공사별 매칭 테스트</button>
+            <span id="central-test-status" class="muted"></span>
+          </div>
+          <div style="margin-top:14px;border-top:1px dashed var(--border);padding-top:10px;">
+            <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px;">대시보드 펼치기 — 프로젝트 상세 컬럼</label>
+            <p class="muted" style="font-size:12px;margin-bottom:6px;">
+              대시보드 행을 펼쳤을 때 표시할 중앙 시트의 컬럼들. 한 줄에 하나씩, <code>컬럼letter:라벨</code> 형식.
+              비워두면 기본값(<code>G:사업구분 / X:계약합계 / E:도로명주소</code>) 사용. 라벨에 '합계/금액/단가/총액' 포함 시 자동으로 원화 포맷 표시.
+            </p>
+            <textarea id="cfg-project-detail-cols" rows="4" placeholder="G:사업구분&#10;X:계약합계&#10;E:도로명주소" style="width:100%;font-family:monospace;font-size:12px;padding:6px;border:1px solid var(--border);border-radius:6px;"></textarea>
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3>📐 환경부 출금계좌 참조시트</h3>
+          <p class="muted" style="margin-bottom:10px">
+            납부내역 시트의 <code>M·N·O</code>열에 채울 값을 가져오는 별도 시트 (예: <code>PM_25년환경부입찰</code>).
+            <code>프로젝트ID</code> 컬럼으로 매칭하여 아래 지정한 컬럼 값을 가져옵니다. 비워두면 위 중앙 시트를 사용합니다.
+          </p>
+          <div style="display:grid;grid-template-columns:1fr 160px 200px;gap:8px;">
+            <label>
+              <span>시트 URL</span>
+              <input type="text" id="cfg-billingref-url" placeholder="https://docs.google.com/spreadsheets/d/.../edit?gid=..." />
+            </label>
+            <label>
+              <span>GID (자동추출)</span>
+              <input type="text" id="cfg-billingref-gid" placeholder="(자동)" />
+            </label>
+            <label>
+              <span>시트(탭)명</span>
+              <input type="text" id="cfg-billingref-name" placeholder="PM_25년환경부입찰" />
+            </label>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;">
+            <label>
+              <span>M열 ← 컬럼</span>
+              <input type="text" id="cfg-billingref-col-m" placeholder="AU" />
+            </label>
+            <label>
+              <span>N열 ← 컬럼</span>
+              <input type="text" id="cfg-billingref-col-n" placeholder="AV" />
+            </label>
+            <label>
+              <span>O열 ← 컬럼</span>
+              <input type="text" id="cfg-billingref-col-o" placeholder="AW" />
+            </label>
+          </div>
+          <div style="margin-top:8px;">
+            <button id="btn-billingref-test">🔌 참조 시트 테스트</button>
+            <span id="billingref-test-status" class="muted"></span>
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3>⏳ 납부대기 시트 (시공사 일괄 제출 → 임시 저장)</h3>
+          <p class="muted" style="margin-bottom:10px">
+            시공사가 <strong>일괄 제출</strong>하면 우선 이 시트로 들어가고, 관리자가 <strong>확인완료</strong>를 누르면 처리 결과 기록 시트로 이동합니다.
+            처리 결과 기록 시트와 컬럼 구조가 동일해야 합니다.
+          </p>
+          <div style="display:grid;grid-template-columns:1fr 180px 220px;gap:8px;">
+            <label>
+              <span>시트 URL</span>
+              <input type="text" id="cfg-pending-url" placeholder="https://docs.google.com/spreadsheets/d/.../edit" />
+            </label>
+            <label>
+              <span>GID (자동추출)</span>
+              <input type="text" id="cfg-pending-gid" placeholder="(자동)" />
+            </label>
+            <label>
+              <span>시트(탭)명</span>
+              <input type="text" id="cfg-pending-name" placeholder="납부대기" />
+            </label>
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3>📝 처리 결과 기록 시트 (납부 이력)</h3>
+          <p class="muted" style="margin-bottom:10px">
+            처리완료 시 자동으로 행이 추가되는 시트. 납부 이력 탭에서도 이 시트를 읽어옵니다.
+          </p>
+          <div style="display:grid;grid-template-columns:1fr 180px 220px;gap:8px;">
+            <label>
+              <span>시트 URL</span>
+              <input type="text" id="cfg-processing-url" placeholder="https://docs.google.com/spreadsheets/d/.../edit" />
+            </label>
+            <label>
+              <span>GID (자동추출)</span>
+              <input type="text" id="cfg-processing-gid" placeholder="(자동)" />
+            </label>
+            <label>
+              <span>시트(탭)명</span>
+              <input type="text" id="cfg-processing-name" placeholder="한전 표준시설부담금 납부내역(윤택)" />
+            </label>
+          </div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3>🔐 시공사 계정 관리</h3>
+          <p class="muted" style="margin-bottom:8px">
+            중앙 프로젝트 시트를 쓰면 개별 시트 URL은 비워두세요. 시공사 이름은 중앙 시트의 <code>시공사</code> 컬럼 값과 일치해야 매칭됩니다.
+          </p>
+
+          <div class="contractor-toolbar">
+            <div class="add-contractor-form">
+              <input type="text" id="new-contractor-name" placeholder="새 시공사 이름 (예: 유닛커넥트)" />
+              <input type="text" id="new-contractor-pw" placeholder="초기 비밀번호" value="" />
+              <button id="btn-add-contractor" class="primary small">➕ 추가</button>
+            </div>
+          </div>
+
+          <div id="contractor-password-list"></div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3>☁️ 클라우드 동기화 (Google Sheets)</h3>
+          <p class="muted" style="margin-bottom:10px">
+            Google Apps Script URL을 입력하면 모든 시공사 데이터가 Google Sheet와 Drive에 자동 동기화됩니다.
+            설정 방법은 <code>apps-script/설치가이드.md</code> 파일을 참고하세요.
+          </p>
+          <label>
+            <span>Apps Script 웹 앱 URL</span>
+            <input type="text" id="cfg-sync-url" placeholder="https://script.google.com/macros/s/.../exec" />
+          </label>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+            <button id="btn-sync-test">🔌 연결 테스트</button>
+            <button id="btn-sync-pull">⬇️ 클라우드에서 가져오기</button>
+            <button id="btn-sync-push-all" class="primary">⬆️ 지금 전체 동기화</button>
+          </div>
+          <p id="sync-status" class="muted" style="margin-top:8px;min-height:18px"></p>
+        </div>
+
+        <div class="card danger">
+          <h3>⚠️ 데이터 관리</h3>
+          <button id="btn-reset-all" class="danger">전체 데이터 초기화</button>
+          <p class="muted">모든 제출 데이터, 첨부 파일, 프로젝트 매핑이 삭제됩니다.</p>
+        </div>
+      </div>
+
+      <div class="save-bar">
+        <button id="btn-save-settings" class="primary">설정 저장</button>
+        <span id="settings-saved" class="muted"></span>
+      </div>
+    </main>
+  </section>
+
+  <!-- ============= 시공사 화면 ============= -->
+  <section id="view-contractor" class="view">
+    <header class="topbar">
+      <div class="brand">
+        <img src="img/logo.png" alt="PLUGLINK" class="logo-img"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='inline-block';" />
+        <svg class="logo-svg"><use href="#logo-pluglink"/></svg>
+        <span class="brand-divider">|</span>
+        <span>한전불입금 관리</span>
+        <span class="badge" id="contractor-badge"></span>
+      </div>
+      <nav class="tabs">
+        <button class="tab active" data-tab="submit">신규 제출</button>
+        <button class="tab" data-tab="history">제출 이력</button>
+      </nav>
+      <div class="right">
+        <button id="btn-contractor-logout" class="ghost">로그아웃</button>
+      </div>
+    </header>
+
+    <!-- 신규 제출 -->
+    <main id="panel-submit" class="panel active">
+      <div class="panel-header">
+        <div>
+          <h2>신규 한전불입금 제출</h2>
+          <p class="muted">
+            <strong id="contractor-deadline-info"></strong>
+          </p>
+          <p class="muted" id="contractor-project-source" style="margin-top:4px"></p>
+        </div>
+        <div class="panel-actions contractor-toolbar">
+          <div class="toolbar-group">
+            <button id="btn-download-template" class="ghost" title="엑셀 양식 다운로드">📄 양식</button>
+            <button id="btn-import-excel" title="엑셀 일괄 업로드">📥 엑셀 업로드</button>
+          </div>
+          <div class="toolbar-group">
+            <button id="btn-add-row">+ 프로젝트 추가</button>
+            <button id="btn-submit-all" class="primary strong">📤 일괄 제출</button>
+          </div>
+        </div>
+      </div>
+      <input type="file" id="excel-import-input" accept=".xlsx,.xls" style="display:none" />
+      <div id="submit-rows"></div>
+      <p id="submit-msg" class="info"></p>
+    </main>
+
+    <!-- 이력 -->
+    <main id="panel-history" class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>납부 이력</h2>
+          <p class="muted">납부 대기 중인 건과 이미 납부 처리된 건이 분리 표시됩니다.</p>
+        </div>
+        <div class="panel-actions">
+          <button id="btn-refresh-history" class="primary">🔄 새로고침</button>
+        </div>
+      </div>
+      <div id="history-status" style="padding:8px 0;color:var(--muted);font-size:13px;"></div>
+
+      <!-- 카드 1: 납부 대기 -->
+      <section class="card" style="margin-bottom:18px;">
+        <h3 style="margin-bottom:8px;">⏳ 납부 대기 <span id="pending-count" class="muted" style="font-weight:normal;font-size:13px;"></span></h3>
+        <p class="muted" style="margin-bottom:10px;font-size:12px;">일괄 제출 후 관리자 확인 대기 중인 건입니다. 비고는 클릭해서 수정할 수 있습니다.</p>
+        <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>프로젝트ID</th>
+              <th>현장명</th>
+              <th>용량</th>
+              <th>표준시설부담금</th>
+              <th>고객번호</th>
+              <th>은행</th>
+              <th>계좌번호</th>
+              <th>비고</th>
+            </tr>
+          </thead>
+          <tbody id="contractor-pending-tbody"></tbody>
+        </table>
+        </div>
+      </section>
+
+      <!-- 카드 2: 납부 완료/처리 -->
+      <section class="card">
+        <h3 style="margin-bottom:8px;">✅ 납부 완료 <span id="paid-count" class="muted" style="font-weight:normal;font-size:13px;"></span></h3>
+        <p class="muted" style="margin-bottom:10px;font-size:12px;">관리자가 확인완료하여 납부내역 시트에 기록된 건입니다.</p>
+        <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>프로젝트ID</th>
+              <th>현장명</th>
+              <th>용량</th>
+              <th>표준시설부담금</th>
+              <th>고객번호</th>
+              <th>은행</th>
+              <th>계좌번호</th>
+              <th>처리일</th>
+              <th>상태</th>
+              <th>비고</th>
+            </tr>
+          </thead>
+          <tbody id="contractor-tbody"></tbody>
+        </table>
+        </div>
+      </section>
+    </main>
+  </section>
+
+  <!-- ============= 파일 뷰어 모달 ============= -->
+  <div id="modal-overlay" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title"></h3>
+        <button id="modal-close" class="ghost">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- ============= 이체증 일괄 분리 모달 ============= -->
+  <div id="split-modal-overlay" class="modal-overlay">
+    <div class="modal" style="max-width:1100px">
+      <div class="modal-header">
+        <h3>📤 통합 이체증 일괄 분리</h3>
+        <button id="split-modal-close" class="ghost">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted" style="margin-bottom:12px">
+          여러 페이지가 합쳐진 통합 이체증 PDF를 업로드하면, 페이지별 텍스트에서 프로젝트번호를 자동 추출해
+          매칭되는 제출 건에 이체증으로 분배합니다. (같은 프로젝트의 여러 페이지는 자동 병합)
+        </p>
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px">
+          <input type="file" id="split-pdf-input" accept="application/pdf" />
+          <button id="btn-split-analyze" class="primary">🔍 분석</button>
+          <span id="split-status" class="muted"></span>
+        </div>
+        <div id="split-result"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/utils.js"></script>
+  <script src="js/sync.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/admin.js"></script>
+  <script src="js/contractor.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

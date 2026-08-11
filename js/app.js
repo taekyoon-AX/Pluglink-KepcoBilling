@@ -1,99 +1,80 @@
 // ============================================================
-// App Router: handles view switching based on auth state
+// 앱 라우터
 // ============================================================
 
 const App = {
+  _tab: null,
+
   init() {
-    // 로그인 버튼
-    document.getElementById('btn-login').onclick = () => this.handleLogin();
-    document.getElementById('login-pw').addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') this.handleLogin();
-    });
-
-    // 모달 닫기
-    document.getElementById('modal-close').onclick = () => {
-      document.getElementById('modal-overlay').classList.remove('active');
-    };
-    document.getElementById('modal-overlay').onclick = (e) => {
-      if (e.target.id === 'modal-overlay') {
-        document.getElementById('modal-overlay').classList.remove('active');
-      }
-    };
-
-    this.route();
-  },
-
-  async route() {
-    const auth = Auth.current();
-    if (!auth) {
-      this.showView('login');
+    // 로그인 상태 확인
+    const s = Auth.current();
+    if (!s) {
+      this._showLogin();
       return;
     }
-
-    // 로그인되어 있으면 클라우드에서 먼저 최신 데이터 가져오기
-    if (Sync.enabled()) {
-      try {
-        await Sync.pull();
-      } catch (e) {
-        console.warn('cloud pull failed', e);
-      }
-    }
-
-    if (auth.role === 'admin') {
-      this.showView('admin');
-      AdminView.init();
-    } else if (auth.role === 'contractor') {
-      this.showView('contractor');
-      ContractorView.init();
-    }
+    this._showApp(s);
   },
 
-  showView(name) {
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.getElementById(`view-${name}`).classList.add('active');
-  },
-
-  async handleLogin() {
-    const id = document.getElementById('login-id').value.trim();
-    const pw = document.getElementById('login-pw').value;
-    const errEl = document.getElementById('login-error');
+  _showLogin() {
+    document.getElementById('view-login').classList.add('active');
+    document.getElementById('view-app').style.display = 'none';
     const btn = document.getElementById('btn-login');
-    errEl.textContent = '';
+    const inp = document.getElementById('login-id');
+    const err = document.getElementById('login-error');
+    err.textContent = '';
+    inp.value = '';
+    inp.focus();
 
-    // 비밀번호 비활성화: 아이디만 입력해도 통과
-    if (!id) {
-      errEl.textContent = '아이디를 입력하세요.';
-      return;
-    }
-    btn.disabled = true;
-    btn.textContent = '로그인 중...';
-    try {
-      const result = await Auth.login(id, pw);
-      if (!result.ok) {
-        errEl.textContent = result.error;
-        return;
-      }
-      document.getElementById('login-id').value = '';
-      document.getElementById('login-pw').value = '';
-      await this.route();
-    } finally {
+    const doLogin = async () => {
+      err.textContent = '';
+      btn.disabled = true;
+      btn.textContent = '로그인 중...';
+      const r = await Auth.login(inp.value);
       btn.disabled = false;
       btn.textContent = '로그인';
-    }
+      if (!r.ok) {
+        err.textContent = r.error || '로그인 실패';
+        return;
+      }
+      this._showApp(r);
+    };
+    btn.onclick = doLogin;
+    inp.onkeydown = e => { if (e.key === 'Enter') doLogin(); };
   },
 
-  logout() {
-    Auth.logout();
-    this.route();
+  _showApp(session) {
+    document.getElementById('view-login').classList.remove('active');
+    document.getElementById('view-app').style.display = 'flex';
+    document.getElementById('header-user').textContent = `${session.name || session.id} (${session.role === 'admin' ? '관리자' : '시공사'})`;
+    document.getElementById('btn-logout').onclick = () => { Auth.logout(); location.reload(); };
+
+    // 탭 렌더링
+    const isAdmin = session.role === 'admin';
+    const tabs = isAdmin ? Admin.navTabs() : Contractor.navTabs();
+    const nav = document.getElementById('app-nav');
+    nav.innerHTML = tabs.map(t => `<button class="nav-btn" data-tab="${t.id}">${t.label}</button>`).join('');
+    nav.querySelectorAll('.nav-btn').forEach(b => {
+      b.onclick = () => this.showTab(b.dataset.tab, isAdmin);
+    });
+
+    this.showTab(tabs[0].id, isAdmin);
+  },
+
+  showTab(id, isAdmin) {
+    this._tab = id;
+    document.querySelectorAll('#app-nav .nav-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+    const content = document.getElementById('app-content');
+    content.innerHTML = '<div class="empty-state"><div class="empty-state-desc">로딩 중...</div></div>';
+    if (isAdmin === undefined) isAdmin = Auth.isAdmin();
+    if (isAdmin) Admin.render(id, content);
+    else Contractor.render(id, content);
   },
 
   onTokenExpired() {
-    Storage.clearAuth();
-    Sync.clearToken();
-    alert('세션이 만료되었습니다. 다시 로그인해주세요.');
-    this.route();
+    Utils.toast('세션이 만료되었습니다. 다시 로그인해주세요.');
+    Auth.logout();
+    location.reload();
   },
 };
 
-// Bootstrap
 document.addEventListener('DOMContentLoaded', () => App.init());

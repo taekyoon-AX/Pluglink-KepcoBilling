@@ -1,63 +1,50 @@
 // ============================================================
-// Authentication: 서버 기반 (Apps Script) + 로컬 폴백
+// 세션 · 인증 (비밀번호 없음 — 아이디만)
 // ============================================================
 
 const Auth = {
-  /**
-   * 서버 로그인 (Apps Script). 서버 연결이 없으면 로컬 비번 폴백 (테스트용).
-   */
-  async login(id, pw) {
-    if (Sync.enabled()) {
-      const r = await Sync.login(id, pw);
-      if (!r || !r.ok) {
-        return { ok: false, error: (r && r.error) || '로그인 실패' };
-      }
-      const auth = {
-        id: r.id,
-        role: r.role,
-        name: r.name || r.id,
-        at: new Date().toISOString(),
-        projectSheetUrl: r.projectSheetUrl || '',
-        projectSheetGid: r.projectSheetGid || '',
-        via: 'server',
-      };
-      Storage.setAuth(auth);
-      return { ok: true, auth };
-    }
+  _KEY: 'pl_kepco_session',
 
-    // 폴백: 로컬 accounts (Apps Script 미설정 시 테스트 전용)
-    const accounts = Storage.getAccounts();
-    const acc = accounts[id];
-    if (!acc || acc.password !== pw) {
-      return { ok: false, error: '아이디 또는 비밀번호가 올바르지 않습니다.' };
+  current() {
+    try { return JSON.parse(sessionStorage.getItem(this._KEY) || 'null'); }
+    catch (e) { return null; }
+  },
+
+  async login(id) {
+    id = String(id || '').trim();
+    if (!id) return { ok: false, error: '아이디를 입력하세요.' };
+    // 서버 로그인 (비밀번호 없이)
+    if (API.enabled()) {
+      const r = await API.login(id, '');
+      if (r && r.ok) {
+        const session = { id, role: r.role || (id === 'admin' ? 'admin' : 'contractor'), name: r.name || id };
+        sessionStorage.setItem(this._KEY, JSON.stringify(session));
+        return { ok: true, ...session };
+      }
+      // 서버 실패 시 로컬 fallback (admin만 허용, 계약사는 관리자가 등록해야 함)
+      if (id === 'admin') {
+        const session = { id: 'admin', role: 'admin', name: '관리자' };
+        sessionStorage.setItem(this._KEY, JSON.stringify(session));
+        return { ok: true, ...session, fallback: true };
+      }
+      return { ok: false, error: r && r.error ? r.error : '로그인 실패' };
     }
-    const auth = {
-      id, role: acc.role, name: acc.name,
-      at: new Date().toISOString(),
-      projectSheetUrl: acc.projectSheetUrl || '',
-      projectSheetGid: acc.projectSheetGid || '',
-      via: 'local',
-    };
-    Storage.setAuth(auth);
-    return { ok: true, auth };
+    // API 미설정: admin만 로컬 진입 허용
+    if (id === 'admin') {
+      const session = { id: 'admin', role: 'admin', name: '관리자' };
+      sessionStorage.setItem(this._KEY, JSON.stringify(session));
+      return { ok: true, ...session, fallback: true };
+    }
+    return { ok: false, error: '서버 URL을 먼저 설정해주세요 (설정 탭).' };
   },
 
   logout() {
-    Storage.clearAuth();
-    Sync.clearToken();
-  },
-
-  current() {
-    return Storage.getAuth();
+    sessionStorage.removeItem(this._KEY);
+    API.clearToken();
   },
 
   isAdmin() {
-    const a = this.current();
-    return a && a.role === 'admin';
-  },
-
-  isContractor() {
-    const a = this.current();
-    return a && a.role === 'contractor';
+    const s = this.current();
+    return s && s.role === 'admin';
   },
 };

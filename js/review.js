@@ -175,8 +175,17 @@ const Review = {
       return;
     }
 
-    // Drive 폴더에 파일 사본 저장 (있는 경우)
-    if (cfg.processedFolderId && (r.s || r.t)) {
+    // Drive 폴더에 파일 사본 저장 (사업구분별 폴더 선택, 없으면 default 사용)
+    const cat = APP.categories.find(c => c.label === catLabel);
+    const catId = cat ? cat.id : 'env25';
+    const folders = cfg.folders || {};
+    const targetFolderId =
+      (folders[catId] && folders[catId].id) ||
+      (folders.default && folders.default.id) ||
+      cfg.processedFolderId ||
+      '';
+
+    if (targetFolderId && (r.s || r.t)) {
       Utils.showLoading('G드라이브 폴더에 저장 중...');
       const sub = { projectId: r.b, projectName: r.d || r.e, contractor: r.a || '' };
       const folderName = Utils.buildFolderName(sub);
@@ -190,7 +199,7 @@ const Review = {
         if (id) files.push({ sourceFileId: id, name: Utils.buildFileName(sub, 'feeNotice', { waitingNumber: r.m }) });
       }
       if (files.length > 0) {
-        await API.copyToProcessedFolder(cfg.processedFolderId, folderName, files);
+        await API.copyToProcessedFolder(targetFolderId, folderName, files);
       }
     }
 

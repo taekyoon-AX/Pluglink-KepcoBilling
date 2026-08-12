@@ -29,7 +29,14 @@ const Store = {
         pmWaitingNumCol: 'A',   // 대기번호
         pmContractSumCol: 'X',  // 계약합계
         pmContractorCol: 'I',   // 시공사
-        // Drive 폴더
+        // Drive 폴더 — 사업구분별 개별 폴더 (없으면 default 사용)
+        folders: {
+          env25:   { url: '', id: '' },
+          private: { url: '', id: '' },
+          env26:   { url: '', id: '' },
+          default: { url: '', id: '' },
+        },
+        // (구) 단일 폴더 — 하위 호환
         processedFolderId: '',
         processedFolderUrl: '',
         // FLEX 연동 (미구현 stub)

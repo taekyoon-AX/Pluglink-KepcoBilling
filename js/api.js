@@ -52,9 +52,31 @@ const API = {
   async ping() { return this.call('ping'); },
 
   // ─── 시트 ───
-  async readPending()   { return this.call('read_pending_rows', { sheetUrl: '', sheetGid: '', sheetName: '' }); },
-  async readProcessing(){ return this.call('read_processing_rows', { sheetUrl: '', sheetGid: '', sheetName: '' }); },
-  async appendPending(row) { return this.call('append_pending_row', { row, sheetUrl: '', sheetGid: '', sheetName: '' }); },
+  async readPending() {
+    const cfg = Store.getConfig();
+    return this.call('read_pending_rows', {
+      sheetUrl: cfg.pendingSheetUrl || '',
+      sheetGid: cfg.pendingSheetGid || '',
+      sheetName: cfg.pendingSheetName || '',
+    });
+  },
+  async readProcessing() {
+    const cfg = Store.getConfig();
+    return this.call('read_processing_rows', {
+      sheetUrl: cfg.processingSheetUrl || '',
+      sheetGid: cfg.processingSheetGid || '',
+      sheetName: cfg.processingSheetName || '',
+    });
+  },
+  async appendPending(row) {
+    const cfg = Store.getConfig();
+    return this.call('append_pending_row', {
+      row,
+      sheetUrl: cfg.pendingSheetUrl || '',
+      sheetGid: cfg.pendingSheetGid || '',
+      sheetName: cfg.pendingSheetName || '',
+    });
+  },
   async appendProcessing(row) {
     const cfg = Store.getConfig();
     return this.call('append_processing_row', {
@@ -62,10 +84,22 @@ const API = {
     });
   },
   async deletePendingMatching(match) {
-    return this.call('delete_pending_row_matching', { match, sheetUrl: '', sheetGid: '', sheetName: '' });
+    const cfg = Store.getConfig();
+    return this.call('delete_pending_row_matching', {
+      match,
+      sheetUrl: cfg.pendingSheetUrl || '',
+      sheetGid: cfg.pendingSheetGid || '',
+      sheetName: cfg.pendingSheetName || '',
+    });
   },
   async updateProcessingNote(rowNumber, note) {
-    return this.call('update_processing_note', { rowNumber, note, sheetUrl: '', sheetGid: '', sheetName: '' });
+    const cfg = Store.getConfig();
+    return this.call('update_processing_note', {
+      rowNumber, note,
+      sheetUrl: cfg.processingSheetUrl || '',
+      sheetGid: cfg.processingSheetGid || '',
+      sheetName: cfg.processingSheetName || '',
+    });
   },
   async updateQStatus(rowNumbers, value) {
     const cfg = Store.getConfig();

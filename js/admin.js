@@ -346,11 +346,38 @@ const Admin = {
 
       <div class="card">
         <div class="card-title">📂 G드라이브 저장 폴더</div>
-        <div class="card-sub">확인완료 시 접수증/고지서 파일이 저장될 폴더 (URL 또는 폴더ID)</div>
-        <label class="field"><span>폴더 URL 또는 ID</span><input id="cfg-folder" type="text" placeholder="https://drive.google.com/drive/folders/..." /></label>
-        <div class="flex gap-8">
-          <button id="btn-folder-test" class="btn">🔌 폴더 접근 테스트</button>
+        <div class="card-sub">확인완료 시 접수증/고지서 파일이 저장될 폴더. <strong>사업구분별로 개별 폴더</strong>를 지정하시면 자동 분류됩니다. 비어 있으면 '기본 폴더' 사용.</div>
+        <div class="form-grid">
+          <label class="field span-2">
+            <span><span class="pill pill-25env">25년환경부</span> 폴더</span>
+            <input id="cfg-folder-env25" type="text" placeholder="https://drive.google.com/drive/folders/... 또는 폴더 ID" />
+          </label>
+          <label class="field span-2">
+            <span><span class="pill pill-private">민자사업</span> 폴더</span>
+            <input id="cfg-folder-private" type="text" placeholder="..." />
+          </label>
+          <label class="field span-2">
+            <span><span class="pill pill-26env">26년환경부</span> 폴더</span>
+            <input id="cfg-folder-env26" type="text" placeholder="..." />
+          </label>
+          <label class="field span-2">
+            <span>🗂️ <strong>기본 폴더</strong> (위 카테고리 폴더가 없을 때 사용)</span>
+            <input id="cfg-folder-default" type="text" placeholder="..." />
+          </label>
+        </div>
+        <div class="flex gap-8 mt-16">
+          <select id="cfg-folder-test-target" class="btn" style="padding:8px 10px;">
+            <option value="env25">25년환경부</option>
+            <option value="private">민자사업</option>
+            <option value="env26">26년환경부</option>
+            <option value="default">기본</option>
+          </select>
+          <button id="btn-folder-test" class="btn">🔌 선택 폴더 접근 테스트</button>
           <span id="folder-test-result" class="muted" style="align-self:center;"></span>
+        </div>
+        <div class="notice notice-info mt-16">
+          💡 <strong>폴더 구조 예시</strong><br>
+          각 폴더 안에 <code>{프로젝트ID}_{현장명}_{차수}차/</code> 형태로 프로젝트별 하위 폴더가 자동 생성되고 파일이 저장됩니다.
         </div>
       </div>
 
@@ -386,7 +413,11 @@ const Admin = {
     document.getElementById('cfg-pm-wait').value = cfg.pmWaitingNumCol;
     document.getElementById('cfg-pm-sum').value = cfg.pmContractSumCol;
     document.getElementById('cfg-pm-contractor').value = cfg.pmContractorCol;
-    document.getElementById('cfg-folder').value = cfg.processedFolderUrl;
+    const folders = cfg.folders || { env25:{}, private:{}, env26:{}, default:{} };
+    document.getElementById('cfg-folder-env25').value   = folders.env25?.url   || '';
+    document.getElementById('cfg-folder-private').value = folders.private?.url || '';
+    document.getElementById('cfg-folder-env26').value   = folders.env26?.url   || '';
+    document.getElementById('cfg-folder-default').value = folders.default?.url || cfg.processedFolderUrl || '';
     document.getElementById('cfg-flex-endpoint').value = cfg.flexEndpoint;
     document.getElementById('cfg-flex-enabled').checked = !!cfg.flexEnabled;
 
@@ -399,12 +430,14 @@ const Admin = {
         : `<span style="color:var(--danger)">✗ 실패: ${r && r.error || ''}</span>`;
     };
     document.getElementById('btn-folder-test').onclick = async () => {
-      const raw = document.getElementById('cfg-folder').value.trim();
+      const target = document.getElementById('cfg-folder-test-target').value;
+      const raw = document.getElementById('cfg-folder-' + target).value.trim();
+      if (!raw) { document.getElementById('folder-test-result').innerHTML = `<span style="color:var(--warning)">이 카테고리의 폴더가 비어있습니다</span>`; return; }
       const id = this._extractFolderId(raw);
-      if (!id) { document.getElementById('folder-test-result').innerHTML = `<span style="color:var(--danger)">폴더 ID 추출 실패</span>`; return; }
+      if (!id) { document.getElementById('folder-test-result').innerHTML = `<span style="color:var(--danger)">폴더 ID 추출 실패 (입력값: ${Utils.esc(raw.slice(0, 40))}${raw.length > 40 ? '…' : ''})</span>`; return; }
       const r = await API.checkFolderAccess(id);
       document.getElementById('folder-test-result').innerHTML = r && r.ok
-        ? `<span style="color:var(--success)">✓ ${Utils.esc(r.name)}</span>`
+        ? `<span style="color:var(--success)">✓ ${Utils.esc(r.name)} · <span class="mono">${Utils.esc(id.slice(0, 20))}…</span></span>`
         : `<span style="color:var(--danger)">✗ ${r && r.error || ''}</span>`;
     };
     document.getElementById('btn-save-cfg').onclick = () => this._saveSettings();
@@ -412,17 +445,34 @@ const Admin = {
 
   _extractFolderId(input) {
     if (!input) return '';
-    const m = String(input).match(/[?&\/]folders\/([a-zA-Z0-9-_]+)/);
+    const s = String(input).trim();
+    // 1) URL: /folders/{id}
+    let m = s.match(/\/folders\/([a-zA-Z0-9_\-]+)/);
     if (m) return m[1];
-    if (/^[a-zA-Z0-9-_]{20,}$/.test(input.trim())) return input.trim();
+    // 2) URL: ?id={id} or &id={id}
+    m = s.match(/[?&]id=([a-zA-Z0-9_\-]+)/);
+    if (m) return m[1];
+    // 3) URL: /d/{id}
+    m = s.match(/\/d\/([a-zA-Z0-9_\-]+)/);
+    if (m) return m[1];
+    // 4) 순수 ID (10자 이상)
+    if (/^[a-zA-Z0-9_\-]{10,}$/.test(s)) return s;
     return '';
   },
 
   async _saveSettings() {
     const $ = id => document.getElementById(id);
     API.setUrl($('cfg-sync-url').value.trim());
-    const folderRaw = $('cfg-folder').value.trim();
+    const folders = {
+      env25:   { url: $('cfg-folder-env25').value.trim(),   id: this._extractFolderId($('cfg-folder-env25').value.trim()) },
+      private: { url: $('cfg-folder-private').value.trim(), id: this._extractFolderId($('cfg-folder-private').value.trim()) },
+      env26:   { url: $('cfg-folder-env26').value.trim(),   id: this._extractFolderId($('cfg-folder-env26').value.trim()) },
+      default: { url: $('cfg-folder-default').value.trim(), id: this._extractFolderId($('cfg-folder-default').value.trim()) },
+    };
     const cfg = Store.patchConfig({
+      folders,
+      processedFolderId: folders.default.id,   // 하위 호환
+      processedFolderUrl: folders.default.url,
       processingSheetUrl: $('cfg-proc-url').value.trim(),
       processingSheetGid: $('cfg-proc-gid').value.trim(),
       processingSheetName: $('cfg-proc-name').value.trim(),
@@ -439,8 +489,6 @@ const Admin = {
       pmWaitingNumCol: ($('cfg-pm-wait').value.trim() || 'A').toUpperCase(),
       pmContractSumCol: ($('cfg-pm-sum').value.trim() || 'X').toUpperCase(),
       pmContractorCol: ($('cfg-pm-contractor').value.trim() || 'I').toUpperCase(),
-      processedFolderUrl: folderRaw,
-      processedFolderId: this._extractFolderId(folderRaw),
       flexEndpoint: $('cfg-flex-endpoint').value.trim(),
       flexEnabled: $('cfg-flex-enabled').checked,
     });

@@ -364,23 +364,33 @@ const Contractor = {
       if (headerIdx < 0) { Utils.hideLoading(); Utils.toast('헤더 행(프로젝트ID 컬럼)을 찾을 수 없습니다. 양식을 확인해주세요.'); return; }
 
       const header = rows[headerIdx].map(v => norm(v));
+      // 우선순위 있는 매칭: 앞의 키가 뒤의 키보다 우선. 특정 키워드 우선 매칭으로
+      // '청구금액' 등 다른 유사 컬럼과 혼동되는 것 방지.
       const findCol = (keys) => {
-        for (let c = 0; c < header.length; c++) {
-          for (const k of keys) { if (header[c].includes(norm(k))) return c; }
+        for (const k of keys) {
+          const nk = norm(k);
+          for (let c = 0; c < header.length; c++) {
+            if (header[c] && header[c].includes(nk)) return c;
+          }
         }
         return -1;
       };
       const cols = {
         pid:  findCol(['프로젝트id', '프로젝트번호', '프로젝트']),
         cap:  findCol(['용량', 'kw', 'capacity']),
-        fee:  findCol(['부담금', '표준시설', 'vat제외', 'vat제', '금액', '납부']),
+        fee:  findCol(['표준시설부담금', '표준시설', 'vat제외', '부담금']),
         cust: findCol(['고객번호', '고객']),
         bank: findCol(['은행']),
         acct: findCol(['계좌']),
         note: findCol(['비고', '메모', '노트']),
       };
       if (cols.pid < 0) { Utils.hideLoading(); Utils.toast('프로젝트ID 컬럼을 찾을 수 없습니다.'); return; }
-      console.log('[Excel] 컬럼 매핑', cols, '헤더:', header);
+      // 첫 데이터 행의 fee 값 로그 (진단용)
+      const firstDataRow = rows[headerIdx + 2] || rows[headerIdx + 1] || [];
+      console.log('[Excel] 컬럼 매핑', cols);
+      console.log('[Excel] 헤더:', header);
+      console.log('[Excel] 표준시설부담금 컬럼(cols.fee):', cols.fee, '→ 헤더값:', cols.fee >= 0 ? header[cols.fee] : '(못찾음)');
+      console.log('[Excel] 첫 데이터 행의 fee 셀 값:', cols.fee >= 0 ? firstDataRow[cols.fee] : '(N/A)');
 
       // 숫자 셀은 콤마 등 제거하고 숫자로 정규화
       const numCell = (v) => {

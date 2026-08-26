@@ -853,16 +853,18 @@ function appendProcessingRow(sheetUrl, gid, sheetName, row) {
 
     // ── 위 행 서식 복사 (엑셀 양식 그대로 유지) ──
     if (targetRow > 1) {
-      const lastCol = Math.max(sheet.getLastColumn(), 16); // P열(16) 최소 보장
+      const lastCol = Math.max(sheet.getLastColumn(), 21); // U열(21) 최소 보장
       const srcRange = sheet.getRange(targetRow - 1, 1, 1, lastCol);
       const dstRange = sheet.getRange(targetRow, 1, 1, lastCol);
       srcRange.copyTo(dstRange, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
     }
 
-    // 컬럼 키별 매핑 (B=2, ..., P=16)
+    // 컬럼 키별 매핑 (A=1 ... U=21)
     const colMap = {
-      b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10,
-      a: 1, k: 11, l: 12, m: 13, n: 14, o: 15, p: 16, q: 17, r: 18,
+      a: 1,  b: 2,  c: 3,  d: 4,  e: 5,
+      f: 6,  g: 7,  h: 8,  i: 9,  j: 10,
+      k: 11, l: 12, m: 13, n: 14, o: 15,
+      p: 16, q: 17, r: 18, s: 19, t: 20, u: 21,
     };
 
     // P열(날짜)은 Date 객체로 변환해 셀에 날짜 서식이 정상 적용되도록 함
@@ -1078,7 +1080,7 @@ function readProcessingRows(sheetUrl, gid, sheetName) {
     const lastRow = sheet.getLastRow();
     if (lastRow < 1) return { ok: true, rows: [], sheet: sheet.getName() };
 
-    const maxCol = 18; // Q=17 (완료확인), R=18 (비고)
+    const maxCol = 21; // A=1 ... U=21 (S=접수증URL, T=고지서URL, U=FLEX문서ID)
     const data = sheet.getRange(1, 1, lastRow, maxCol).getValues();
 
     const fmtDate = (v) => {
@@ -1104,20 +1106,25 @@ function readProcessingRows(sheetUrl, gid, sheetName) {
       var qChecked = qVal === true || qVal === 'TRUE' || qVal === 1;
       rows.push({
         rowNumber: r + 1,
-        a: String(rowArr[0] || ''), // A열: 시공사
-        b: b,
-        e: String(rowArr[4] || ''),
-        f: String(rowArr[5] || ''),
-        g: fmtNum(rowArr[6]),
-        j: String(rowArr[9] || ''),
-        k: String(rowArr[10] || ''),
-        l: String(rowArr[11] || ''),
-        m: String(rowArr[12] || ''),
-        n: String(rowArr[13] || ''),
-        o: String(rowArr[14] || ''),
-        p: fmtDate(rowArr[15]),
-        q: qChecked, // Q열: 완료확인 체크박스
+        a: String(rowArr[0] || ''),  // A열: 시공사
+        b: b,                         // B열: 프로젝트ID
+        c: String(rowArr[2] || ''),  // C열: 사업구분
+        d: String(rowArr[3] || ''),  // D열: 현장명
+        e: String(rowArr[4] || ''),  // E열: 도로명주소
+        f: String(rowArr[5] || ''),  // F열: 용량
+        g: fmtNum(rowArr[6]),         // G열: 표준시설부담금
+        j: String(rowArr[9] || ''),  // J열: 고객번호
+        k: String(rowArr[10] || ''), // K열: 은행
+        l: String(rowArr[11] || ''), // L열: 계좌
+        m: String(rowArr[12] || ''), // M열: 대기번호
+        n: String(rowArr[13] || ''), // N열: 계약합계
+        o: String(rowArr[14] || ''), // O열: (여유)
+        p: fmtDate(rowArr[15]),       // P열: 처리날짜
+        q: qChecked,                  // Q열: 완료확인 체크박스
         r: String(rowArr[17] || ''), // R열: 비고
+        s: String(rowArr[18] || ''), // S열: 접수증 Drive URL
+        t: String(rowArr[19] || ''), // T열: 고지서 Drive URL
+        u: String(rowArr[20] || ''), // U열: FLEX 문서 ID
       });
     }
     return { ok: true, rows: rows, sheet: sheet.getName(), total: rows.length };

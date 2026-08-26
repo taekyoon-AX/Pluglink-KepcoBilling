@@ -22,10 +22,10 @@ const Store = {
         centralProjectSheetGid: '',
         centralProjectSheetName: 'PM_영차영차new',
         centralIdCol: 'B', // 프로젝트ID 컬럼
-        // 참조 컬럼들 (PM 시트)
+        // 참조 컬럼들 (PM 시트) — 이전 확인 기준: G=사업구분, X=계약합계, E=도로명주소
         pmSiteNameCol: 'D',     // 현장명
         pmAddressCol: 'E',      // 도로명주소
-        pmCategoryCol: 'F',     // 사업구분
+        pmCategoryCol: 'G',     // 사업구분 (25년환경부/민자/26년환경부)
         pmWaitingNumCol: 'A',   // 대기번호
         pmContractSumCol: 'X',  // 계약합계
         pmContractorCol: 'I',   // 시공사

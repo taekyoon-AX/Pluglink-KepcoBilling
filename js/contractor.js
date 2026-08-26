@@ -393,6 +393,23 @@ const Contractor = {
       Utils.showLoading(`제출 중... ${i + 1}/${this._items.length}`);
       const it = this._items[i];
       try {
+        // PM 시트 정보 최신화 (사용자가 lookup 완료 전 제출한 경우 등)
+        if ((!it.pmMeta || !it.projectName) && API.enabled()) {
+          const cfg = Store.getConfig();
+          const lcols = [cfg.pmSiteNameCol, cfg.pmAddressCol, cfg.pmCategoryCol, cfg.pmWaitingNumCol, cfg.pmContractSumCol];
+          const lr = await API.lookupCentral([it.projectId], lcols);
+          if (lr && lr.ok && lr.map && lr.map[it.projectId]) {
+            const hit = lr.map[it.projectId];
+            it.projectName = hit[cfg.pmSiteNameCol] || it.projectName || '';
+            it.pmMeta = {
+              address:       hit[cfg.pmAddressCol] || '',
+              category:      hit[cfg.pmCategoryCol] || '',
+              waitingNumber: hit[cfg.pmWaitingNumCol] || '',
+              contractSum:   hit[cfg.pmContractSumCol] || '',
+            };
+          }
+        }
+
         // 파일 → PDF 변환 → Drive 업로드
         const sub = {
           projectId: it.projectId,

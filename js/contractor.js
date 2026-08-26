@@ -62,6 +62,8 @@ const Contractor = {
         </div>
       </div>
 
+      <datalist id="projects-list"></datalist>
+      <div id="my-projects-summary"></div>
       <div id="submit-items"></div>
 
       <div class="card" style="text-align:center;padding:16px;">
@@ -79,6 +81,8 @@ const Contractor = {
 
     // 시공사 프로젝트 로드
     await this._loadContractorProjects(auth.name || auth.id);
+    this._renderProjectsDatalist();
+    this._renderProjectsSummary();
 
     // 초기 1개 행 추가
     this._items = [];
@@ -92,9 +96,60 @@ const Contractor = {
   },
 
   async _loadContractorProjects(contractorName) {
+    this._projectsLoaded = false;
+    this._projects = {};
     if (!API.enabled()) return;
     const r = await API.fetchProjectsForContractor(contractorName);
-    if (r && r.ok && r.projects) this._projects = r.projects;
+    if (r && r.ok && r.projects) {
+      this._projects = r.projects;
+      this._projectsLoaded = true;
+    } else {
+      this._projectsLoadError = (r && r.error) || 'unknown';
+    }
+  },
+
+  _renderProjectsDatalist() {
+    const dl = document.getElementById('projects-list');
+    if (!dl) return;
+    dl.innerHTML = Object.entries(this._projects || {}).map(([id, meta]) => {
+      const name = typeof meta === 'string' ? meta : (meta.name || '');
+      return `<option value="${Utils.esc(id)}">${Utils.esc(name)}</option>`;
+    }).join('');
+  },
+
+  _renderProjectsSummary() {
+    const el = document.getElementById('my-projects-summary');
+    if (!el) return;
+    if (!this._projectsLoaded) {
+      el.innerHTML = `<div class="notice notice-warn">⚠ 프로젝트 목록을 불러오지 못했습니다. 관리자 설정을 확인하세요.${this._projectsLoadError ? ` (${this._projectsLoadError})` : ''}</div>`;
+      return;
+    }
+    const count = Object.keys(this._projects || {}).length;
+    if (count === 0) {
+      el.innerHTML = `<div class="notice notice-warn">⚠ 이 시공사에 매칭되는 프로젝트가 없습니다. 중앙 시트에 시공사명이 올바르게 등록되어 있는지 관리자에게 문의하세요.</div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="notice notice-info" style="display:flex;align-items:center;gap:10px;">
+        <span>📋 <strong>${count}개</strong>의 프로젝트를 입력할 수 있습니다.</span>
+        <button class="btn btn-ghost btn-sm" onclick="Contractor._toggleProjectsList(this)">전체 목록 보기</button>
+        <div id="my-projects-list-detail" style="display:none;flex-basis:100%;margin-top:10px;">
+          <div style="max-height:200px;overflow-y:auto;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;">
+            ${Object.entries(this._projects).map(([id, meta]) => {
+              const name = typeof meta === 'string' ? meta : (meta.name || '');
+              return `<div style="padding:4px 6px;border-bottom:1px solid var(--surface-alt);"><span class="mono" style="color:var(--primary);font-weight:600;">${Utils.esc(id)}</span> · ${Utils.esc(name)}</div>`;
+            }).join('')}
+          </div>
+        </div>
+      </div>`;
+  },
+
+  _toggleProjectsList(btn) {
+    const el = document.getElementById('my-projects-list-detail');
+    if (!el) return;
+    const shown = el.style.display !== 'none';
+    el.style.display = shown ? 'none' : 'block';
+    btn.textContent = shown ? '전체 목록 보기' : '목록 접기';
   },
 
   _addItem() {
@@ -169,10 +224,14 @@ const Contractor = {
         </div>
 
         <div class="form-grid">
-          <label class="field field-required" style="grid-column: span 2;">
+          <label class="field field-required ${it.invalidProject ? 'field-invalid' : ''}" style="grid-column: span 2;">
             <span>프로젝트 ID</span>
-            <input type="text" class="f-projectId" value="${Utils.esc(it.projectId)}" placeholder="예: 26863" list="projects-list" />
-            ${autoFilled ? `<div class="field-hint" style="color:var(--primary)">✓ ${Utils.esc(proj.name)}</div>` : `<div class="field-hint">프로젝트 ID 입력 시 자동으로 이름·주소 채워집니다</div>`}
+            <input type="text" class="f-projectId" value="${Utils.esc(it.projectId)}" placeholder="입력 시 본인 시공사 프로젝트 자동 검색" list="projects-list" autocomplete="off" />
+            ${it.invalidProject
+              ? `<div class="field-hint" style="color:var(--danger)">⚠ 이 프로젝트 ID는 본인 시공사에 등록되어 있지 않습니다. 상단 <strong>전체 목록 보기</strong>에서 확인하세요.</div>`
+              : it.projectName
+                ? `<div class="field-hint" style="color:var(--primary)">✓ ${Utils.esc(it.projectName)}${it.pmMeta?.address ? ` · <span class="muted">${Utils.esc(it.pmMeta.address)}</span>` : ''}</div>`
+                : `<div class="field-hint">프로젝트 ID를 입력하거나 목록에서 선택하세요</div>`}
           </label>
 
           <label class="field field-required">
@@ -239,15 +298,25 @@ const Contractor = {
     const it = this._items.find(x => x.id === itemId);
     if (!it) return;
     it.projectId = projectId.trim();
+    it.projectName = '';
+    it.pmMeta = null;
+    it.invalidProject = false;
 
-    // 로컬 프로젝트 매핑에서 검색
-    let projMeta = this._projects[it.projectId];
-    if (projMeta) {
-      it.projectName = projMeta.name || '';
+    if (!it.projectId) { this._renderItems(); return; }
+
+    // 본인 시공사 프로젝트 목록에 있는지 검증
+    if (this._projectsLoaded) {
+      const projMeta = this._projects[it.projectId];
+      if (!projMeta) {
+        it.invalidProject = true;
+        this._renderItems();
+        return;
+      }
+      it.projectName = typeof projMeta === 'string' ? projMeta : (projMeta.name || '');
     }
 
-    // PM 시트에서 세부 정보 조회
-    if (it.projectId && API.enabled()) {
+    // PM 시트에서 세부 정보 조회 (매칭된 경우만)
+    if (API.enabled()) {
       const cfg = Store.getConfig();
       const cols = [cfg.pmSiteNameCol, cfg.pmAddressCol, cfg.pmCategoryCol, cfg.pmWaitingNumCol, cfg.pmContractSumCol];
       const r = await API.lookupCentral([it.projectId], cols);
@@ -272,6 +341,10 @@ const Contractor = {
     const auth = Auth.current();
     const errs = [];
     this._items.forEach((it, i) => {
+      if (it.invalidProject) {
+        errs.push(`#${i + 1}: 프로젝트 ID "${it.projectId}"는 본인 시공사 프로젝트가 아닙니다.`);
+        return;
+      }
       const missing = [];
       if (!it.projectId) missing.push('프로젝트ID');
       if (!it.capacity) missing.push('용량');
@@ -424,39 +497,54 @@ const Contractor = {
 
       if (imported.length === 0) { Utils.hideLoading(); Utils.toast('가져올 항목이 없습니다.'); return; }
 
-      // PM 시트 lookup (일괄)
+      // 본인 시공사 프로젝트 검증
+      if (this._projectsLoaded && Object.keys(this._projects).length > 0) {
+        imported.forEach(it => {
+          if (!this._projects[it.projectId]) it.invalidProject = true;
+          else {
+            const meta = this._projects[it.projectId];
+            it.projectName = typeof meta === 'string' ? meta : (meta.name || '');
+          }
+        });
+      }
+
+      // PM 시트 lookup (일괄) — 유효한 프로젝트만
       if (API.enabled()) {
         const cfg = Store.getConfig();
-        const ids = [...new Set(imported.map(x => x.projectId))];
-        const lookupCols = [cfg.pmSiteNameCol, cfg.pmAddressCol, cfg.pmCategoryCol, cfg.pmWaitingNumCol, cfg.pmContractSumCol];
-        const lr = await API.lookupCentral(ids, lookupCols);
-        if (lr && lr.ok && lr.map) {
-          imported.forEach(it => {
-            const hit = lr.map[it.projectId];
-            if (hit) {
-              it.projectName = hit[cfg.pmSiteNameCol] || '';
-              it.pmMeta = {
-                address: hit[cfg.pmAddressCol] || '',
-                category: hit[cfg.pmCategoryCol] || '',
-                waitingNumber: hit[cfg.pmWaitingNumCol] || '',
-                contractSum: hit[cfg.pmContractSumCol] || '',
-              };
-            }
-          });
+        const validIds = [...new Set(imported.filter(x => !x.invalidProject).map(x => x.projectId))];
+        if (validIds.length > 0) {
+          const lookupCols = [cfg.pmSiteNameCol, cfg.pmAddressCol, cfg.pmCategoryCol, cfg.pmWaitingNumCol, cfg.pmContractSumCol];
+          const lr = await API.lookupCentral(validIds, lookupCols);
+          if (lr && lr.ok && lr.map) {
+            imported.forEach(it => {
+              const hit = lr.map[it.projectId];
+              if (hit) {
+                it.projectName = hit[cfg.pmSiteNameCol] || it.projectName || '';
+                it.pmMeta = {
+                  address: hit[cfg.pmAddressCol] || '',
+                  category: hit[cfg.pmCategoryCol] || '',
+                  waitingNumber: hit[cfg.pmWaitingNumCol] || '',
+                  contractSum: hit[cfg.pmContractSumCol] || '',
+                };
+              }
+            });
+          }
         }
       }
 
-      // 기존 items 에 추가 (병합)
+      // 기존 items 에 추가 (병합) — 기존 빈 항목 제거
       if (!this._items) this._items = [];
-      // 기존 빈 항목 제거 (프로젝트ID 미입력 상태)
       this._items = this._items.filter(x => x.projectId);
       this._items.push(...imported);
       Utils.hideLoading();
       this._renderItems();
 
-      const notMatched = imported.filter(x => !x.projectName).length;
-      const msg = `✓ ${imported.length}건 가져옴 · PM 매칭 ${imported.length - notMatched}건${notMatched ? ` (미매칭 ${notMatched}건)` : ''}`;
-      document.getElementById('submit-msg').innerHTML = `<div class="notice notice-info">${msg} — 각 항목에 <strong>접수증·고지서 파일</strong>을 첨부해 주세요.</div>`;
+      const invalid = imported.filter(x => x.invalidProject).length;
+      const matched = imported.filter(x => !x.invalidProject && x.projectName).length;
+      const msgParts = [`✓ ${imported.length}건 가져옴`];
+      if (matched) msgParts.push(`매칭 ${matched}건`);
+      if (invalid) msgParts.push(`<span style="color:var(--danger)">⚠ 본인 시공사 아닌 프로젝트 ${invalid}건 — 제출 시 제외됩니다</span>`);
+      document.getElementById('submit-msg').innerHTML = `<div class="notice ${invalid ? 'notice-warn' : 'notice-info'}">${msgParts.join(' · ')} — 각 항목에 <strong>접수증·고지서 파일</strong>을 첨부해 주세요.</div>`;
       document.getElementById('excel-input').value = ''; // 다시 같은 파일 업로드 가능하도록
     } catch (e) {
       Utils.hideLoading();

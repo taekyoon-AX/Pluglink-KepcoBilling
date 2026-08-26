@@ -461,6 +461,15 @@ button { font-family: inherit; }
   color: var(--primary-dark) !important;
   font-weight: 500;
 }
+.field-invalid input {
+  border-color: var(--danger) !important;
+  background: var(--danger-light) !important;
+  color: var(--danger) !important;
+  font-weight: 500;
+}
+.field-invalid input:focus {
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15) !important;
+}
 
 /* ─── File attach (접수증/고지서) ─── */
 .file-attach-row {

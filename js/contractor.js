@@ -168,6 +168,16 @@ const Contractor = {
   _renderItems() {
     const wrap = document.getElementById('submit-items');
     if (!wrap) return;
+
+    // 포커스 · 커서 위치 스냅샷 (async 재렌더로 인한 입력 중 focus 손실 방지)
+    const active = document.activeElement;
+    const snap = {
+      cardId: active && active.closest ? (active.closest('[data-item]')?.dataset?.item || null) : null,
+      field: active ? (active.dataset?.field || (active.classList?.contains('f-projectId') ? 'projectId' : null)) : null,
+      selStart: active && 'selectionStart' in active ? active.selectionStart : null,
+      selEnd:   active && 'selectionEnd'   in active ? active.selectionEnd   : null,
+    };
+
     if (this._items.length === 0) {
       wrap.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">추가된 요청이 없습니다</div><div class="empty-state-desc">+ 프로젝트 추가 버튼을 눌러 시작하세요.</div></div>`;
       return;
@@ -195,6 +205,22 @@ const Contractor = {
       const feeInp = card.querySelector('.f-fee-notice');
       if (feeInp) feeInp.onchange = e => this._onFileChange(it.id, 'feeNotice', e.target.files[0]);
     });
+
+    // 포커스 · 커서 위치 복원 (async 재렌더로 인한 입력 중단 방지)
+    if (snap.cardId && snap.field) {
+      const card = document.querySelector(`[data-item="${snap.cardId}"]`);
+      if (card) {
+        const inp = snap.field === 'projectId'
+          ? card.querySelector('.f-projectId')
+          : card.querySelector(`[data-field="${snap.field}"]`);
+        if (inp && inp !== document.activeElement) {
+          inp.focus();
+          if (typeof snap.selStart === 'number' && typeof snap.selEnd === 'number') {
+            try { inp.setSelectionRange(snap.selStart, snap.selEnd); } catch (e) {}
+          }
+        }
+      }
+    }
   },
 
   _updateFeeHint(card, it) {
@@ -206,7 +232,7 @@ const Contractor = {
   },
 
   _itemCard(it, idx) {
-    const cat = Utils.detectCategory(it.projectName);
+    const cat = Utils.categoryFromPm(it.pmMeta && it.pmMeta.category, it.projectName);
     const proj = this._projects[it.projectId];
     const autoFilled = !!(proj && proj.name);
     const vat = Utils.calcVat(it.baseFee);
@@ -241,7 +267,7 @@ const Contractor = {
 
           <label class="field field-required">
             <span>표준시설부담금 <span style="color:var(--muted);font-weight:400;">(VAT 제외)</span></span>
-            <input type="number" class="f-input" data-field="baseFee" value="${Utils.parseNum(it.baseFee) || ''}" placeholder="예: 350000" />
+            <input type="text" inputmode="numeric" autocomplete="off" class="f-input" data-field="baseFee" value="${Utils.esc(it.baseFee || '')}" placeholder="예: 350000" />
             <div class="field-hint baseFee-hint">부가세 <strong>${Utils.fmtMoney(vat)}원</strong> · 청구합계 <strong style="color:var(--primary)">${Utils.fmtMoney(total)}원</strong></div>
           </label>
 
@@ -380,12 +406,12 @@ const Contractor = {
         const appUp = await API.uploadFile(appFile, sub, 'applicationReceipt');
         const feeUp = await API.uploadFile(feeFile, sub, 'feeNotice');
 
-        // 납부대기 행 추가
-        const cat = (it.pmMeta && it.pmMeta.category) || Utils.detectCategory(it.projectName);
+        // 납부대기 행 추가 (사업구분: PM 시트 값 우선)
+        const catId = Utils.categoryFromPm(it.pmMeta && it.pmMeta.category, it.projectName);
         const row = {
           a: auth.name || auth.id,                             // 시공사
           b: it.projectId,                                     // 프로젝트ID
-          c: Utils.categoryLabel(cat),                         // 사업구분
+          c: Utils.categoryLabel(catId),                       // 사업구분 (정규 라벨로 저장)
           d: it.projectName,                                   // 현장명
           e: (it.pmMeta && it.pmMeta.address) || '',           // 도로명주소
           f: `${it.capacity} kW`,                              // 용량
@@ -621,11 +647,11 @@ const Contractor = {
         <thead><tr><th>구분</th><th>프로젝트ID</th><th>현장명</th><th>용량</th><th>부담금</th><th>처리일</th><th>상태</th></tr></thead>
         <tbody>
           ${rows.map(r => {
-            const cat = r.c || '';
-            const catId = APP.categories.find(x => x.label === cat)?.id || 'env25';
+            const catId = Utils.categoryFromPm(r.c, r.d);
+            const catLabel = Utils.categoryLabel(catId);
             const done = r.q;
             return `<tr>
-              <td><span class="pill ${Utils.categoryPill(catId)}">${Utils.esc(cat || Utils.categoryLabel(catId))}</span></td>
+              <td><span class="pill ${Utils.categoryPill(catId)}">${Utils.esc(catLabel)}</span></td>
               <td class="mono">${Utils.esc(r.b)}</td>
               <td>${Utils.esc(r.d || r.e || '-')}</td>
               <td>${Utils.esc(r.f)}</td>

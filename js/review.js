@@ -26,8 +26,8 @@ const Review = {
     const r = this._row;
     const total = Utils.calcTotal(r.g);
     const vat = Utils.calcVat(r.g);
-    const catLabel = r.c || Utils.categoryLabel(Utils.detectCategory(r.d));
-    const catId = APP.categories.find(c => c.label === catLabel)?.id || Utils.detectCategory(r.d);
+    const catId = Utils.categoryFromPm(r.c, r.d);
+    const catLabel = Utils.categoryLabel(catId);
 
     document.getElementById('review-body').innerHTML = `
       <div class="review-grid">
@@ -146,7 +146,7 @@ const Review = {
     Utils.showLoading('납부내역에 기록 중...');
     const cfg = Store.getConfig();
     const edits = this._readFormValues();
-    const catLabel = r.c || Utils.categoryLabel(Utils.detectCategory(r.d));
+    const catLabel = Utils.categoryLabel(Utils.categoryFromPm(r.c, r.d));
 
     // 납부내역 append (기존 대기 데이터 + 편집값)
     const row = {

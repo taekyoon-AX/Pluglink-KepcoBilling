@@ -182,8 +182,8 @@ const Admin = {
   },
 
   _rowHtml(r) {
-    const catLabel = r.c || Utils.categoryLabel(Utils.detectCategory(r.d));
-    const catId = APP.categories.find(c => c.label === catLabel)?.id || Utils.detectCategory(r.d);
+    const catId = Utils.categoryFromPm(r.c, r.d);
+    const catLabel = Utils.categoryLabel(catId);
     const total = Utils.calcTotal(r.g);
     const hasApp = !!r.s;
     const hasFee = !!r.t;
@@ -275,8 +275,8 @@ const Admin = {
       <div class="table-wrap"><table class="data-table">
         <thead><tr><th>사업</th><th>시공사</th><th>프로젝트ID</th><th>현장명</th><th>용량</th><th class="num">청구금액</th><th>처리일</th><th>상태</th></tr></thead>
         <tbody>${rows.map(r => {
-          const catLabel = r.c || '';
-          const catId = APP.categories.find(c => c.label === catLabel)?.id || 'env25';
+          const catId = Utils.categoryFromPm(r.c, r.d);
+          const catLabel = Utils.categoryLabel(catId);
           return `<tr>
             <td><span class="pill ${Utils.categoryPill(catId)}">${Utils.esc(catLabel || '-')}</span></td>
             <td>${Utils.esc(r.a || '-')}</td>

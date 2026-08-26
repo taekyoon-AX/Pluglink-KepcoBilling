@@ -90,9 +90,24 @@ const Utils = {
   detectCategory(projectName) {
     const s = String(projectName || '');
     if (/25년환경부|2025.*환경부|환경부.*25/.test(s)) return 'env25';
-    if (/26년환경부|2026.*환경부|환경부.*26/.test(s)) return 'env26';
+    if (/26년환경부|26년기후부|2026.*환경부|2026.*기후부|기후부.*26|환경부.*26/.test(s)) return 'env26';
     if (/민자|자체|비환경부/.test(s)) return 'private';
     return 'env25'; // 기본값 (현재 대다수)
+  },
+
+  /** PM 시트 category 값 → 카테고리 id 매핑. 매칭 안 되면 projectName 기반 detectCategory. */
+  categoryFromPm(pmCategoryValue, projectNameFallback) {
+    const s = String(pmCategoryValue || '').trim();
+    if (s) {
+      // 정확히 라벨 매칭
+      const exact = APP.categories.find(c => c.label === s || c.id === s);
+      if (exact) return exact.id;
+      // 텍스트 부분 매칭 (사용자 시트의 표기 다양성 대응)
+      if (/민자|자체|비환경/.test(s)) return 'private';
+      if (/26년|2026|26.*환경|26.*기후|기후부/.test(s)) return 'env26';
+      if (/25년|2025|25.*환경/.test(s)) return 'env25';
+    }
+    return this.detectCategory(projectNameFallback);
   },
   categoryLabel(id) {
     const c = APP.categories.find(x => x.id === id);

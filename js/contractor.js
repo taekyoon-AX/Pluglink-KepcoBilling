@@ -328,15 +328,135 @@ const Contractor = {
 
   async _importExcel(file) {
     if (!file) return;
-    // TODO: 엑셀 파싱 → this._items 채우기 (기존 로직 참고)
-    Utils.toast('엑셀 일괄 업로드는 곧 추가됩니다. 지금은 개별 입력을 사용하세요.');
+    Utils.showLoading('엑셀 파싱 중...');
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (!ws) throw new Error('시트를 찾을 수 없습니다');
+
+      // 2차원 배열로 읽기 (헤더 자동 탐지)
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      if (!rows || rows.length < 2) throw new Error('데이터가 없습니다');
+
+      // 헤더 행 탐지 (첫 5행 중 '프로젝트ID' 또는 '프로젝트' 있는 행)
+      const norm = s => String(s || '').replace(/\s+/g, '').toLowerCase();
+      let headerIdx = -1;
+      for (let i = 0; i < Math.min(5, rows.length); i++) {
+        const row = rows[i];
+        if (row.some(v => /프로젝트|projectid/i.test(norm(v)))) { headerIdx = i; break; }
+      }
+      if (headerIdx < 0) { Utils.hideLoading(); Utils.toast('헤더 행(프로젝트ID 컬럼)을 찾을 수 없습니다. 양식을 확인해주세요.'); return; }
+
+      const header = rows[headerIdx].map(v => norm(v));
+      const findCol = (keys) => {
+        for (let c = 0; c < header.length; c++) {
+          for (const k of keys) { if (header[c].includes(norm(k))) return c; }
+        }
+        return -1;
+      };
+      const cols = {
+        pid:  findCol(['프로젝트id', '프로젝트번호', '프로젝트']),
+        cap:  findCol(['용량', 'kw', 'capacity']),
+        fee:  findCol(['부담금', '표준시설', '금액']),
+        cust: findCol(['고객번호', '고객']),
+        bank: findCol(['은행']),
+        acct: findCol(['계좌', '계좌번호']),
+        note: findCol(['비고', '메모', '노트']),
+      };
+      if (cols.pid < 0) { Utils.hideLoading(); Utils.toast('프로젝트ID 컬럼을 찾을 수 없습니다.'); return; }
+
+      // 파싱
+      const imported = [];
+      for (let r = headerIdx + 1; r < rows.length; r++) {
+        const row = rows[r];
+        const pid = String(row[cols.pid] || '').trim();
+        if (!pid) continue;
+        imported.push({
+          id: 'itm_' + Date.now() + '_' + r + '_' + Math.random().toString(36).slice(2, 6),
+          projectId: pid,
+          projectName: '',
+          capacity: cols.cap  >= 0 ? String(row[cols.cap] || '').trim() : '',
+          baseFee:  cols.fee  >= 0 ? String(row[cols.fee] || '').trim() : '',
+          customerNumber: cols.cust >= 0 ? String(row[cols.cust] || '').trim() : '',
+          customerBank:   cols.bank >= 0 ? String(row[cols.bank] || '').trim() : '',
+          customerAccount:cols.acct >= 0 ? String(row[cols.acct] || '').trim() : '',
+          notes: cols.note >= 0 ? String(row[cols.note] || '').trim() : '',
+          appReceipt: null,
+          feeNotice: null,
+        });
+      }
+
+      if (imported.length === 0) { Utils.hideLoading(); Utils.toast('가져올 항목이 없습니다.'); return; }
+
+      // PM 시트 lookup (일괄)
+      if (API.enabled()) {
+        const cfg = Store.getConfig();
+        const ids = [...new Set(imported.map(x => x.projectId))];
+        const lookupCols = [cfg.pmSiteNameCol, cfg.pmAddressCol, cfg.pmCategoryCol, cfg.pmWaitingNumCol, cfg.pmContractSumCol];
+        const lr = await API.lookupCentral(ids, lookupCols);
+        if (lr && lr.ok && lr.map) {
+          imported.forEach(it => {
+            const hit = lr.map[it.projectId];
+            if (hit) {
+              it.projectName = hit[cfg.pmSiteNameCol] || '';
+              it.pmMeta = {
+                address: hit[cfg.pmAddressCol] || '',
+                category: hit[cfg.pmCategoryCol] || '',
+                waitingNumber: hit[cfg.pmWaitingNumCol] || '',
+                contractSum: hit[cfg.pmContractSumCol] || '',
+              };
+            }
+          });
+        }
+      }
+
+      // 기존 items 에 추가 (병합)
+      if (!this._items) this._items = [];
+      // 기존 빈 항목 제거 (프로젝트ID 미입력 상태)
+      this._items = this._items.filter(x => x.projectId);
+      this._items.push(...imported);
+      Utils.hideLoading();
+      this._renderItems();
+
+      const notMatched = imported.filter(x => !x.projectName).length;
+      const msg = `✓ ${imported.length}건 가져옴 · PM 매칭 ${imported.length - notMatched}건${notMatched ? ` (미매칭 ${notMatched}건)` : ''}`;
+      document.getElementById('submit-msg').innerHTML = `<div class="notice notice-info">${msg} — 각 항목에 <strong>접수증·고지서 파일</strong>을 첨부해 주세요.</div>`;
+      document.getElementById('excel-input').value = ''; // 다시 같은 파일 업로드 가능하도록
+    } catch (e) {
+      Utils.hideLoading();
+      console.error('excel import error', e);
+      Utils.toast('엑셀 파싱 실패: ' + (e.message || e));
+    }
   },
+
   _downloadTemplate() {
-    // assets/ 에 있는 양식 파일 다운로드
-    const a = document.createElement('a');
-    a.href = 'assets/한전표준시설부담금납부_양식.xlsx';
-    a.download = '한전표준시설부담금납부_양식.xlsx';
-    a.click();
+    // 동적 생성 — 필드 안내 헤더 + 예시 행
+    const headers = ['프로젝트ID', '용량(kW)', '표준시설부담금(원)', '고객번호', '은행', '계좌번호', '비고'];
+    const example = ['26863', '30', '350000', '12-3456-7890', '기업', '123-45678-901234', '(선택) 메모'];
+    const guide   = ['* 필수', '* 필수', '* 필수', '* 필수', '* 필수', '* 필수', '선택'];
+    const aoa = [
+      ['한전표준시설부담금 납부 요청 · 일괄 등록 양식'],
+      [`※ 접수증·고지서 파일은 업로드 후 각 항목마다 개별 첨부해주세요.`],
+      [],
+      headers,
+      guide,
+      example,
+      example.map(() => ''), // 빈 행
+      example.map(() => ''),
+      example.map(() => ''),
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    // 컬럼 폭
+    ws['!cols'] = [
+      { wch: 12 }, { wch: 10 }, { wch: 16 }, { wch: 18 },
+      { wch: 10 }, { wch: 20 }, { wch: 20 },
+    ];
+    // 제목 셀 병합
+    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }, { s: { r: 1, c: 0 }, e: { r: 1, c: 6 } }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '납부요청');
+    XLSX.writeFile(wb, '한전표준시설부담금납부_양식.xlsx');
   },
 
   // ══════════ 나의 이력 ══════════

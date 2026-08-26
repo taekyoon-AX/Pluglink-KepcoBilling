@@ -462,11 +462,24 @@ button { font-family: inherit; }
   font-weight: 500;
 }
 
-/* ─── File dropzones ─── */
+/* ─── File attach (접수증/고지서) ─── */
+.file-attach-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 16px;
+}
+@media (max-width: 700px) { .file-attach-row { grid-template-columns: 1fr; } }
+.file-attach-slot { display: flex; flex-direction: column; gap: 8px; }
+.file-attach-title { font-size: 13px; font-weight: 600; color: var(--text); }
+
 .file-dropzone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  position: relative;
+  min-height: 110px;
   border: 2px dashed var(--border-strong);
   border-radius: var(--radius);
-  padding: 24px;
+  padding: 18px 20px;
   text-align: center;
   background: var(--surface-alt);
   cursor: pointer;
@@ -475,19 +488,27 @@ button { font-family: inherit; }
 .file-dropzone:hover, .file-dropzone.dragover {
   border-color: var(--primary);
   background: var(--primary-ghost);
+  transform: translateY(-1px);
 }
-.file-dropzone-icon { font-size: 32px; margin-bottom: 8px; }
+.file-dropzone-icon { font-size: 28px; margin-bottom: 6px; }
 .file-dropzone-label { font-size: 13px; font-weight: 600; color: var(--text); }
 .file-dropzone-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
 .file-selected {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px;
+  min-height: 110px;
   background: var(--primary-ghost);
-  border: 1px solid var(--primary-light);
-  border-radius: var(--radius-sm);
+  border: 2px solid var(--primary-light);
+  border-radius: var(--radius);
   font-size: 13px;
 }
-.file-selected .file-name { flex: 1; color: var(--primary-dark); font-weight: 500; }
+.file-selected .file-name {
+  flex: 1;
+  color: var(--primary-dark);
+  font-weight: 500;
+  word-break: break-all;
+  min-width: 0;
+}
 
 /* ─── Sub-item row (projects/locations) ─── */
 .item-row {

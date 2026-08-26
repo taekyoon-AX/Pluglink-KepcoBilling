@@ -122,14 +122,32 @@ const Contractor = {
     this._items.forEach(it => {
       const card = document.querySelector(`[data-item="${it.id}"]`);
       if (!card) return;
-      card.querySelector('.f-projectId').onchange = e => this._onProjectIdChange(it.id, e.target.value);
+      const pidInp = card.querySelector('.f-projectId');
+      if (pidInp) {
+        pidInp.onchange = e => this._onProjectIdChange(it.id, e.target.value);
+        pidInp.oninput = e => { it.projectId = e.target.value; }; // 상태만 저장, 재렌더 X
+      }
+      // 일반 입력: 상태 저장 + baseFee 는 부가세/합계 라이브 업데이트 (재렌더 X → 포커스 유지)
       card.querySelectorAll('.f-input').forEach(inp => {
-        inp.oninput = e => { it[inp.dataset.field] = e.target.value; this._recalc(it.id); };
+        inp.oninput = e => {
+          it[inp.dataset.field] = e.target.value;
+          if (inp.dataset.field === 'baseFee') this._updateFeeHint(card, it);
+        };
       });
       card.querySelector('.btn-remove').onclick = () => this._removeItem(it.id);
-      card.querySelector('.f-app-receipt').onchange = e => this._onFileChange(it.id, 'appReceipt', e.target.files[0]);
-      card.querySelector('.f-fee-notice').onchange = e => this._onFileChange(it.id, 'feeNotice', e.target.files[0]);
+      const appInp = card.querySelector('.f-app-receipt');
+      if (appInp) appInp.onchange = e => this._onFileChange(it.id, 'appReceipt', e.target.files[0]);
+      const feeInp = card.querySelector('.f-fee-notice');
+      if (feeInp) feeInp.onchange = e => this._onFileChange(it.id, 'feeNotice', e.target.files[0]);
     });
+  },
+
+  _updateFeeHint(card, it) {
+    const hint = card.querySelector('.baseFee-hint');
+    if (!hint) return;
+    const vat = Utils.calcVat(it.baseFee);
+    const total = Utils.calcTotal(it.baseFee);
+    hint.innerHTML = `부가세 <strong>${Utils.fmtMoney(vat)}원</strong> · 청구합계 <strong style="color:var(--primary)">${Utils.fmtMoney(total)}원</strong>`;
   },
 
   _itemCard(it, idx) {
@@ -163,9 +181,9 @@ const Contractor = {
           </label>
 
           <label class="field field-required">
-            <span>표준시설부담금</span>
-            <input type="number" class="f-input" data-field="baseFee" value="${Utils.esc(it.baseFee)}" placeholder="예: 350000" />
-            <div class="field-hint">부가세 <strong>${Utils.fmtMoney(vat)}원</strong> · 합계 <strong style="color:var(--primary)">${Utils.fmtMoney(total)}원</strong></div>
+            <span>표준시설부담금 <span style="color:var(--muted);font-weight:400;">(VAT 제외)</span></span>
+            <input type="number" class="f-input" data-field="baseFee" value="${Utils.parseNum(it.baseFee) || ''}" placeholder="예: 350000" />
+            <div class="field-hint baseFee-hint">부가세 <strong>${Utils.fmtMoney(vat)}원</strong> · 청구합계 <strong style="color:var(--primary)">${Utils.fmtMoney(total)}원</strong></div>
           </label>
 
           <label class="field field-required">
@@ -189,18 +207,18 @@ const Contractor = {
           </label>
         </div>
 
-        <div class="form-grid" style="margin-top:16px;">
-          <div>
-            <div class="field-hint" style="margin-bottom:6px;font-weight:600;color:var(--text);">전기사용신청접수증 <span style="color:var(--danger)">*</span></div>
+        <div class="file-attach-row">
+          <div class="file-attach-slot">
+            <div class="file-attach-title">전기사용신청접수증 <span style="color:var(--danger)">*</span></div>
             ${it.appReceipt
-              ? `<div class="file-selected"><span>📄</span><span class="file-name">${Utils.esc(it.appReceipt.name)}</span><button class="btn btn-ghost btn-sm" onclick="Contractor._clearFile('${it.id}','appReceipt')">✕</button></div>`
-              : `<label class="file-dropzone"><div class="file-dropzone-icon">📄</div><div class="file-dropzone-label">클릭하여 접수증 첨부</div><div class="file-dropzone-hint">PDF · JPG · PNG</div><input type="file" class="f-app-receipt" accept="application/pdf,image/*" style="display:none" /></label>`}
+              ? `<div class="file-selected"><span style="font-size:18px">📄</span><span class="file-name">${Utils.esc(it.appReceipt.name)}</span><button class="btn btn-ghost btn-sm" onclick="Contractor._clearFile('${it.id}','appReceipt')">✕ 제거</button></div>`
+              : `<label class="file-dropzone"><div class="file-dropzone-icon">📄</div><div class="file-dropzone-label">클릭하여 접수증 첨부</div><div class="file-dropzone-hint">PDF · JPG · PNG</div><input type="file" class="f-app-receipt" accept="application/pdf,image/*" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0;" /></label>`}
           </div>
-          <div>
-            <div class="field-hint" style="margin-bottom:6px;font-weight:600;color:var(--text);">시설부담금 고지서 <span style="color:var(--danger)">*</span></div>
+          <div class="file-attach-slot">
+            <div class="file-attach-title">시설부담금 고지서 <span style="color:var(--danger)">*</span></div>
             ${it.feeNotice
-              ? `<div class="file-selected"><span>📄</span><span class="file-name">${Utils.esc(it.feeNotice.name)}</span><button class="btn btn-ghost btn-sm" onclick="Contractor._clearFile('${it.id}','feeNotice')">✕</button></div>`
-              : `<label class="file-dropzone"><div class="file-dropzone-icon">📄</div><div class="file-dropzone-label">클릭하여 고지서 첨부</div><div class="file-dropzone-hint">PDF · JPG · PNG</div><input type="file" class="f-fee-notice" accept="application/pdf,image/*" style="display:none" /></label>`}
+              ? `<div class="file-selected"><span style="font-size:18px">📄</span><span class="file-name">${Utils.esc(it.feeNotice.name)}</span><button class="btn btn-ghost btn-sm" onclick="Contractor._clearFile('${it.id}','feeNotice')">✕ 제거</button></div>`
+              : `<label class="file-dropzone"><div class="file-dropzone-icon">📄</div><div class="file-dropzone-label">클릭하여 고지서 첨부</div><div class="file-dropzone-hint">PDF · JPG · PNG</div><input type="file" class="f-fee-notice" accept="application/pdf,image/*" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0;" /></label>`}
           </div>
         </div>
       </div>
@@ -247,10 +265,7 @@ const Contractor = {
     this._renderItems();
   },
 
-  _recalc(itemId) {
-    // 값만 입력되면 부가세/합계는 카드 렌더 시 재계산됨. 여기선 렌더만.
-    this._renderItems();
-  },
+  // _recalc 는 제거됨 (재렌더로 인한 포커스 상실 방지) — _updateFeeHint 로 대체
 
   async _submitAll() {
     if (!this._items || this._items.length === 0) { Utils.toast('제출할 항목이 없습니다.'); return; }
@@ -358,30 +373,40 @@ const Contractor = {
       const cols = {
         pid:  findCol(['프로젝트id', '프로젝트번호', '프로젝트']),
         cap:  findCol(['용량', 'kw', 'capacity']),
-        fee:  findCol(['부담금', '표준시설', '금액']),
+        fee:  findCol(['부담금', '표준시설', 'vat제외', 'vat제', '금액', '납부']),
         cust: findCol(['고객번호', '고객']),
         bank: findCol(['은행']),
-        acct: findCol(['계좌', '계좌번호']),
+        acct: findCol(['계좌']),
         note: findCol(['비고', '메모', '노트']),
       };
       if (cols.pid < 0) { Utils.hideLoading(); Utils.toast('프로젝트ID 컬럼을 찾을 수 없습니다.'); return; }
+      console.log('[Excel] 컬럼 매핑', cols, '헤더:', header);
+
+      // 숫자 셀은 콤마 등 제거하고 숫자로 정규화
+      const numCell = (v) => {
+        if (v === undefined || v === null || v === '') return '';
+        if (typeof v === 'number') return String(v);
+        return String(v).replace(/,/g, '').replace(/[^0-9.\-]/g, '');
+      };
+      const strCell = (v) => v === undefined || v === null ? '' : String(v).trim();
 
       // 파싱
       const imported = [];
       for (let r = headerIdx + 1; r < rows.length; r++) {
         const row = rows[r];
-        const pid = String(row[cols.pid] || '').trim();
-        if (!pid) continue;
+        const pid = strCell(row[cols.pid]);
+        // 안내 행 스킵 (별표 · 필수 · 예: 등)
+        if (!pid || /^[*※]|^필수|^선택|^예[):]|^\(선택\)/.test(pid)) continue;
         imported.push({
           id: 'itm_' + Date.now() + '_' + r + '_' + Math.random().toString(36).slice(2, 6),
           projectId: pid,
           projectName: '',
-          capacity: cols.cap  >= 0 ? String(row[cols.cap] || '').trim() : '',
-          baseFee:  cols.fee  >= 0 ? String(row[cols.fee] || '').trim() : '',
-          customerNumber: cols.cust >= 0 ? String(row[cols.cust] || '').trim() : '',
-          customerBank:   cols.bank >= 0 ? String(row[cols.bank] || '').trim() : '',
-          customerAccount:cols.acct >= 0 ? String(row[cols.acct] || '').trim() : '',
-          notes: cols.note >= 0 ? String(row[cols.note] || '').trim() : '',
+          capacity: cols.cap  >= 0 ? numCell(row[cols.cap]) : '',
+          baseFee:  cols.fee  >= 0 ? numCell(row[cols.fee]) : '',
+          customerNumber: cols.cust >= 0 ? strCell(row[cols.cust]) : '',
+          customerBank:   cols.bank >= 0 ? strCell(row[cols.bank]) : '',
+          customerAccount:cols.acct >= 0 ? strCell(row[cols.acct]) : '',
+          notes: cols.note >= 0 ? strCell(row[cols.note]) : '',
           appReceipt: null,
           feeNotice: null,
         });
@@ -432,7 +457,7 @@ const Contractor = {
 
   _downloadTemplate() {
     // 동적 생성 — 필드 안내 헤더 + 예시 행
-    const headers = ['프로젝트ID', '용량(kW)', '표준시설부담금(원)', '고객번호', '은행', '계좌번호', '비고'];
+    const headers = ['프로젝트ID', '용량(kW)', '표준시설부담금(VAT제외)', '고객번호', '은행', '계좌번호', '비고'];
     const example = ['26863', '30', '350000', '12-3456-7890', '기업', '123-45678-901234', '(선택) 메모'];
     const guide   = ['* 필수', '* 필수', '* 필수', '* 필수', '* 필수', '* 필수', '선택'];
     const aoa = [

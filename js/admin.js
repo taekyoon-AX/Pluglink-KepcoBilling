@@ -46,6 +46,11 @@ const AdminView = {
     const billingRefTestBtn = document.getElementById('btn-billingref-test');
     if (billingRefTestBtn) billingRefTestBtn.onclick = () => this.billingRefTest();
     document.getElementById('btn-folder-test').onclick = () => this.folderAccessTest();
+    const cats = ['env25','climate26','private'];
+    cats.forEach(cat => {
+      const btn = document.getElementById('btn-folder-test-' + cat);
+      if (btn) btn.onclick = () => this.folderAccessTestCategory(cat);
+    });
     document.getElementById('btn-select-local-folder').onclick = () => this.selectLocalFolder();
     document.getElementById('btn-clear-local-folder').onclick = () => this.clearLocalFolder();
 
@@ -528,7 +533,9 @@ const AdminView = {
     if (!groups || !pdfBytes) return;
 
     const cfg = Storage.getConfig();
-    const driveConfigured = !!(Sync.enabled() && cfg.processedFolderId);
+    // 카테고리별 폴더 또는 레거시 단일 폴더 중 하나라도 설정되어 있으면 Drive 저장 활성화
+    const anyCategoryFolder = !!(cfg.processedFolderId_env25 || cfg.processedFolderId_climate26 || cfg.processedFolderId_private);
+    const driveConfigured = !!(Sync.enabled() && (anyCategoryFolder || cfg.processedFolderId));
 
     // 로컬 폴더 핸들 (있으면 가져옴)
     let localHandle = null;
@@ -613,10 +620,13 @@ const AdminView = {
         continue;
       }
 
-      // ── Drive 저장 ──
+      // ── Drive 저장 (sub 카테고리별 폴더 라우팅) ──
       if (driveConfigured) {
         try {
-          const r = await Sync.copyToProcessedFolder(cfg.processedFolderId, folderName, [{
+          const rep0 = targetSubs[0];
+          const picked = this._pickProcessedFolderId(rep0);
+          if (!picked.id) throw new Error(`${Utils.categoryLabel(picked.category)} 폴더 미설정`);
+          const r = await Sync.copyToProcessedFolder(picked.id, folderName, [{
             base64: this._arrayBufferToBase64(newPdfBytes),
             mimeType: 'application/pdf',
             name: fileName,
@@ -920,8 +930,11 @@ const AdminView = {
 
     const matchedSub = this._findMatchingSub(row);
     if (matchedSub) {
+      // 저장 폴더 지정 다이얼로그 (promptFolderOnConfirm=true 이면)
+      const override = await this._promptFolderOverride(matchedSub, row);
+      if (override && override.cancel) return;
       await this._syncRowNotesToSub(row, matchedSub);
-      await this.actionConfirmComplete(matchedSub.id, true, row);
+      await this.actionConfirmComplete(matchedSub.id, true, row, override || undefined);
       await this._refreshDashboardData();
       alert('✓ 확인완료 처리되었습니다.');
     } else {
@@ -1113,6 +1126,11 @@ const AdminView = {
     }
 
     // 2단계: 프로젝트별 폴더 저장 (매칭 sub 가 있는 항목만)
+    // 카테고리별로 한 번씩만 저장 폴더 override 를 물어본다 (일괄 처리 UX)
+    const categoryOverrides = {}; // { env25: {folderId?,skip?}, ... }
+    const cfg2 = Storage.getConfig();
+    const promptEnabled = cfg2.promptFolderOnConfirm !== false;
+
     for (let i = 0; i < rowNumbers.length; i++) {
       const row = pendingMap[rowNumbers[i]];
       if (!row) continue;
@@ -1123,9 +1141,27 @@ const AdminView = {
       seenProjects.add(key);
       projectCount++;
       if (btn) btn.textContent = `⏳ 폴더 저장 ${seenProjects.size}...`;
+
+      // 카테고리별 override 결정 (프롬프트 1회만)
+      const guessSub = { ...matchedSub, category: row.c || matchedSub.category };
+      const cat = Utils.detectCategory(guessSub);
+      let override;
+      if (promptEnabled) {
+        if (!(cat in categoryOverrides)) {
+          const o = await this._promptFolderOverride(matchedSub, row);
+          if (o && o.cancel) {
+            // 사용자가 전체 취소를 선택했으면 이후 모두 skip
+            categoryOverrides[cat] = { skip: true };
+          } else {
+            categoryOverrides[cat] = o || { category: cat };
+          }
+        }
+        override = categoryOverrides[cat];
+      }
+
       try {
         const [dr, lr] = await Promise.all([
-          this.copyToProcessedFolder(matchedSub),
+          this.copyToProcessedFolder(matchedSub, override),
           this.copyToLocalFolder(matchedSub),
         ]);
         if (dr && dr.ok) {
@@ -1353,8 +1389,9 @@ const AdminView = {
   /**
    * 확인완료: 납부내역 시트에 기록하고 폴더에 저장
    * silent=true 이면 confirm 없이 실행 (일괄 처리 시 사용)
+   * override: { folderId?, category?, skip? } — 외부에서 전달받은 Drive 저장 경로 지정
    */
-  async actionConfirmComplete(id, silent = false, pendingRow = null) {
+  async actionConfirmComplete(id, silent = false, pendingRow = null, override = null) {
     if (!silent && !confirm('이 항목을 확인완료 처리하시겠습니까?\n납부내역 시트에 기록되고 폴더에 저장됩니다.')) return;
 
     const today = new Date();
@@ -1366,10 +1403,16 @@ const AdminView = {
     const sub = Storage.getSubmissions().find(s => s.id === id);
     let driveResult = null, localResult = null;
     if (sub) {
+      // 확인 시 저장 경로 지정 다이얼로그 (silent/override 지정 시 스킵)
+      let resolvedOverride = override;
+      if (!silent && !override) {
+        resolvedOverride = await this._promptFolderOverride(sub, pendingRow);
+        if (resolvedOverride && resolvedOverride.cancel) return; // 사용자 취소
+      }
       await this.uploadNotesTxt(sub);
       await this.recordToProcessingSheet(sub, pendingRow);
       const [dr, lr] = await Promise.all([
-        this.copyToProcessedFolder(sub),
+        this.copyToProcessedFolder(sub, resolvedOverride || undefined),
         this.copyToLocalFolder(sub),
       ]);
       driveResult = dr;
@@ -1383,6 +1426,54 @@ const AdminView = {
       alert('✓ 확인완료 처리되었습니다.\n\n' + this._formatSaveSummary(driveResult, localResult));
     }
     return { driveResult, localResult };
+  },
+
+  /**
+   * 확인 시 Drive 저장 폴더 재확인 다이얼로그.
+   * promptFolderOnConfirm=false 면 자동 감지만 사용.
+   * 반환: { folderId?, category?, skip?, cancel? } 또는 null
+   */
+  async _promptFolderOverride(sub, pendingRow) {
+    const cfg = Storage.getConfig();
+    if (cfg.promptFolderOnConfirm === false) return null; // 자동 감지만
+    // 사업구분 자동 감지 (sub + pendingRow.c = 사업구분)
+    const guessSub = { ...sub };
+    if (pendingRow && pendingRow.c) guessSub.category = pendingRow.c;
+    const detected = Utils.detectCategory(guessSub);
+    const detectedLabel = Utils.categoryLabel(detected);
+    const detectedId  = cfg['processedFolderId_' + detected] || '';
+    const detectedUrl = cfg['processedFolderUrl_' + detected] || '';
+
+    const projLabel = `${sub.projectId || '?'} / ${(sub.projectName || '').replace(/_/g,' ')}`;
+
+    const msg =
+      `[저장 폴더 지정]\n` +
+      `프로젝트: ${projLabel}\n` +
+      `자동 감지: ${detectedLabel}` + (detectedUrl ? `\n  → ${detectedUrl}` : ' (미설정)') + `\n\n` +
+      `OK  = 자동 감지 폴더에 저장\n` +
+      `URL = 입력란에 Drive 폴더 URL/ID 를 넣고 OK (일회성 override)\n` +
+      `빈값 입력 후 OK  = Drive 저장 생략 (로컬 폴더만)\n` +
+      `취소 = 확인완료 취소\n\n` +
+      `Drive 폴더 URL/ID (비우면 Drive 저장 생략):`;
+    const raw = window.prompt(msg, detectedUrl || detectedId || '');
+    if (raw === null) return { cancel: true }; // 사용자 취소
+    const trimmed = raw.trim();
+    if (trimmed === '') return { skip: true }; // Drive 저장 생략
+    // 입력값이 자동 감지된 URL/ID와 동일하면 자동 라우팅
+    if (trimmed === detectedUrl || trimmed === detectedId) {
+      return { category: detected };
+    }
+    // 커스텀 override — Drive ID 추출
+    if (/^[a-zA-Z]:[\\/]/.test(trimmed)) {
+      alert('Windows 로컬 경로는 Drive 폴더가 아닙니다. Drive URL/ID 를 입력하세요.\nDrive 저장은 생략됩니다.');
+      return { skip: true };
+    }
+    const fid = this._extractFolderId(trimmed);
+    if (!fid) {
+      alert('입력에서 Drive 폴더 ID 를 추출할 수 없습니다.\nDrive 저장은 생략됩니다.');
+      return { skip: true };
+    }
+    return { folderId: fid, category: detected };
   },
 
   /**
@@ -1852,8 +1943,16 @@ const AdminView = {
       document.getElementById('cfg-pending-name').value = cfg.pendingSheetName || '';
     }
 
-    // 처리완료 폴더
+    // 처리완료 폴더 (3분류 + 레거시)
+    const envEl      = document.getElementById('cfg-processed-folder-env25');
+    const climateEl  = document.getElementById('cfg-processed-folder-climate26');
+    const privateEl  = document.getElementById('cfg-processed-folder-private');
+    if (envEl)     envEl.value     = cfg.processedFolderUrl_env25 || '';
+    if (climateEl) climateEl.value = cfg.processedFolderUrl_climate26 || '';
+    if (privateEl) privateEl.value = cfg.processedFolderUrl_private || '';
     document.getElementById('cfg-processed-folder').value = cfg.processedFolderUrl || '';
+    const promptChk = document.getElementById('cfg-prompt-folder-on-confirm');
+    if (promptChk) promptChk.checked = cfg.promptFolderOnConfirm !== false;
   },
 
   saveSettings() {
@@ -1978,10 +2077,25 @@ const AdminView = {
       }
     }
 
-    // 처리완료 폴더 저장
+    // 처리완료 폴더 저장 (3분류 + 레거시)
+    const saveCatFolder = (cat) => {
+      const el = document.getElementById('cfg-processed-folder-' + cat);
+      if (!el) return;
+      const raw = el.value.trim();
+      cfg['processedFolderUrl_' + cat] = raw;
+      cfg['processedFolderId_' + cat]  = this._extractFolderId(raw);
+      // 입력이 있는데 ID 추출이 실패했으면 경고
+      if (raw && !cfg['processedFolderId_' + cat]) {
+        const statusEl = document.getElementById('folder-test-status-' + cat);
+        if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger)">⚠ 폴더 ID 추출 실패 — Drive URL/ID 형식인지 확인하세요.</span>';
+      }
+    };
+    ['env25','climate26','private'].forEach(saveCatFolder);
     const folderInput = document.getElementById('cfg-processed-folder').value.trim();
     cfg.processedFolderUrl = folderInput;
-    cfg.processedFolderId = this._extractFolderId(folderInput);
+    cfg.processedFolderId  = this._extractFolderId(folderInput);
+    const promptChk = document.getElementById('cfg-prompt-folder-on-confirm');
+    cfg.promptFolderOnConfirm = promptChk ? !!promptChk.checked : true;
     Storage.setConfig(cfg);
 
     const msg = document.getElementById('settings-saved');
@@ -2077,16 +2191,63 @@ const AdminView = {
 
   _extractFolderId(input) {
     if (!input) return '';
-    const m = String(input).match(/[?&\/]folders\/([a-zA-Z0-9-_]+)/);
+    const s = String(input).trim();
+    // Windows 로컬 경로 (G:\ 등) 는 Drive가 아님 — 명확히 거절
+    if (/^[a-zA-Z]:[\\/]/.test(s)) return '';
+    // Google Drive URL 패턴
+    const m = s.match(/[?&\/]folders\/([a-zA-Z0-9-_]+)/);
     if (m) return m[1];
-    if (/^[a-zA-Z0-9-_]{20,}$/.test(input.trim())) return input.trim();
+    const openQ = s.match(/[?&]id=([a-zA-Z0-9-_]+)/);
+    if (openQ) return openQ[1];
+    // 순수 ID (20자 이상 영숫자/_/-)
+    if (/^[a-zA-Z0-9-_]{15,}$/.test(s)) return s;
     return '';
+  },
+
+  /**
+   * sub의 카테고리에 맞는 Drive 폴더 ID 반환.
+   * 1순위: 카테고리별 설정 (processedFolderId_env25 등)
+   * 2순위: 레거시 단일 설정 (processedFolderId)
+   */
+  _pickProcessedFolderId(sub, overrideCategory) {
+    const cfg = Storage.getConfig();
+    const cat = overrideCategory || Utils.detectCategory(sub);
+    const key = `processedFolderId_${cat}`;
+    const fid = cfg[key];
+    if (fid) return { id: fid, category: cat, source: 'category' };
+    if (cfg.processedFolderId) return { id: cfg.processedFolderId, category: cat, source: 'legacy' };
+    return { id: '', category: cat, source: 'none' };
   },
 
   async folderAccessTest() {
     const input = document.getElementById('cfg-processed-folder').value.trim();
     const status = document.getElementById('folder-test-status');
     if (!input) { status.textContent = '폴더 URL/ID를 입력하세요.'; return; }
+    if (/^[a-zA-Z]:[\\/]/.test(input)) {
+      status.innerHTML = '<span style="color:var(--danger)">✗ Windows 로컬 경로는 Drive 폴더가 아닙니다. drive.google.com URL 을 입력하세요.</span>';
+      return;
+    }
+    const id = this._extractFolderId(input);
+    if (!id) { status.innerHTML = '<span style="color:var(--danger)">URL에서 폴더 ID를 추출할 수 없음</span>'; return; }
+    status.textContent = '⏳ 폴더 접근 테스트 중...';
+    const r = await Sync.checkFolderAccess(id);
+    if (r.ok) {
+      status.innerHTML = `<span style="color:var(--success)">✓ 접근 성공: ${r.name}</span>`;
+    } else {
+      status.innerHTML = `<span style="color:var(--danger)">✗ 실패: ${r.error}</span>`;
+    }
+  },
+
+  /** 카테고리별 폴더 접근 테스트 — env25/climate26/private */
+  async folderAccessTestCategory(cat) {
+    const input = (document.getElementById('cfg-processed-folder-' + cat).value || '').trim();
+    const status = document.getElementById('folder-test-status-' + cat);
+    if (!status) return;
+    if (!input) { status.textContent = '폴더 URL/ID를 입력하세요.'; return; }
+    if (/^[a-zA-Z]:[\\/]/.test(input)) {
+      status.innerHTML = '<span style="color:var(--danger)">✗ Windows 로컬 경로는 Drive 폴더가 아닙니다. drive.google.com URL 을 입력하세요.</span>';
+      return;
+    }
     const id = this._extractFolderId(input);
     if (!id) { status.innerHTML = '<span style="color:var(--danger)">URL에서 폴더 ID를 추출할 수 없음</span>'; return; }
     status.textContent = '⏳ 폴더 접근 테스트 중...';
@@ -2325,10 +2486,18 @@ const AdminView = {
    * - 이체증: 모든 거점 PDF 병합 → 1파일 (다중이면 파일명에 -N거점)
    * - 비고: 모든 거점 합쳐서 txt 1개
    */
-  async copyToProcessedFolder(sub) {
+  async copyToProcessedFolder(sub, override) {
     if (!Sync.enabled()) return;
     const cfg = Storage.getConfig();
-    if (!cfg.processedFolderId) return;
+    // 카테고리 자동 감지 → 카테고리별 폴더 선택
+    // override: { folderId?, category?, skip? } — 확인 다이얼로그에서 전달
+    if (override && override.skip) return;
+    let targetFolderId = override && override.folderId;
+    if (!targetFolderId) {
+      const picked = this._pickProcessedFolderId(sub, override && override.category);
+      targetFolderId = picked.id;
+    }
+    if (!targetFolderId) return;
 
     // 같은 시공사 + 같은 프로젝트의 모든 submission (제출 순서)
     const submissions = Storage.getSubmissions();
@@ -2444,7 +2613,7 @@ const AdminView = {
 
     if (files.length === 0) return;
 
-    const r = await Sync.copyToProcessedFolder(cfg.processedFolderId, folderName, files);
+    const r = await Sync.copyToProcessedFolder(targetFolderId, folderName, files);
     if (r.ok) {
       const okCount = r.results.filter(x => x.ok).length;
       const failCount = r.results.length - okCount;
@@ -2592,6 +2761,17 @@ const AdminView = {
 
     const cfg = Storage.getConfig();
 
+    // 템플릿: 5~24행 (총 20행) 데이터 영역, 25행에 =SUM(H5:H24) 합계,
+    // 26~32행 특이사항 영역. 템플릿 구조 보존 — 수식·스타일·합계 손대지 않음.
+    const DATA_START = 5;
+    const DATA_END   = 24;
+    const DATA_CAP   = DATA_END - DATA_START + 1; // 20
+
+    if (filtered.length > DATA_CAP) {
+      if (!confirm(`전체 제출 ${filtered.length}건이 양식의 최대 ${DATA_CAP}행을 초과합니다.\n앞 ${DATA_CAP}건만 출력됩니다. 계속할까요?`)) return;
+    }
+    const rows = filtered.slice(0, DATA_CAP);
+
     // 1) 양식 파일 로드
     let templateBuf;
     try {
@@ -2606,7 +2786,7 @@ const AdminView = {
     const wb = XLSX.read(templateBuf, { type: 'array', cellStyles: true });
     const ws = wb.Sheets[wb.SheetNames[0]];
 
-    // 2) M·N·O(엑셀 L·M·N) 값을 참조 시트(환경부 출금계좌)에서 조회
+    // 2) M·N·O 참조 시트 lookup (옵션)
     const colM = (cfg.billingRefColM || 'AU').toUpperCase();
     const colN = (cfg.billingRefColN || 'AV').toUpperCase();
     const colO = (cfg.billingRefColO || 'AW').toUpperCase();
@@ -2617,7 +2797,7 @@ const AdminView = {
 
     let centralMap = {};
     if (Sync.enabled() && refUrl) {
-      const projectIds = [...new Set(filtered.map(r => r.b).filter(Boolean))];
+      const projectIds = [...new Set(rows.map(r => r.b).filter(Boolean))];
       const r = await Sync.lookupCentralColumns(refUrl, refGid, refName, projectIds, [colM, colN, colO]);
       if (r.ok && r.map) {
         Object.keys(r.map).forEach(pid => {
@@ -2629,84 +2809,73 @@ const AdminView = {
       }
     }
 
-    // 3) 데이터 행 채우기 (5행부터 시작)
-    const startRow = 5;
-    const STYLE_COLS = ['B','C','D','E','F','G','H','I','J','K','L','M','N'];
-    const templateStyles = {};
-    STYLE_COLS.forEach(col => {
-      const cell = ws[col + startRow];
-      if (cell && cell.s) templateStyles[col] = JSON.parse(JSON.stringify(cell.s));
-    });
-
     const parseFee = v => Number(String(v || '').replace(/[^0-9.-]/g, '')) || 0;
     const parseCap = v => {
       const n = Number(String(v || '').replace(/[^0-9.]/g, ''));
       return isNaN(n) ? '' : n;
     };
 
-    filtered.forEach((row, i) => {
-      const r = startRow + i;
+    // 3) 템플릿 셀 스타일 유지 — 각 셀의 .s 는 그대로 두고 .v / .t 만 교체
+    //    G·H 열은 템플릿의 shared formula (=F*0.1, =F+G) 그대로 유지.
+    const setValue = (addr, value, type) => {
+      const existing = ws[addr] || {};
+      // t='n' 숫자, 's' 문자열. value가 ''이면 셀을 비움(값만 제거, 스타일 유지)
+      const style = existing.s;
+      if (value === '' || value == null) {
+        // 셀 값 비우기: v / t 제거, 스타일만 보존
+        if (style) ws[addr] = { s: style };
+        else delete ws[addr];
+        return;
+      }
+      const cell = { v: value, t: type || 's' };
+      if (style) cell.s = style;
+      ws[addr] = cell;
+    };
+
+    rows.forEach((row, i) => {
+      const r = DATA_START + i;
       const central = centralMap[row.b] || {};
-      const set = (col, value, type) => {
-        const addr = col + r;
-        ws[addr] = { v: value, t: type || 's' };
-        if (templateStyles[col]) ws[addr].s = templateStyles[col];
-      };
-      const setFormula = (col, formula, value) => {
-        const addr = col + r;
-        ws[addr] = { f: formula, v: value, t: 'n' };
-        if (templateStyles[col]) ws[addr].s = templateStyles[col];
-      };
 
       const baseFee = parseFee(row.g);
-      const vat = Math.round(baseFee * 0.1);
-      const total = baseFee + vat;
-      const cap = parseCap(row.f);
+      const cap     = parseCap(row.f);
 
-      // B: 번호
-      set('B', i + 1, 'n');
-      // C: 프로젝트ID
-      set('C', row.b || '', 's');
-      // D: 현장명 (이미 거점 suffix 포함된 e열)
-      set('D', row.e || '', 's');
-      // E: 용량
-      set('E', cap, cap !== '' ? 'n' : 's');
-      // F: 표준부담금
-      set('F', baseFee, 'n');
-      // G: 부가세
-      setFormula('G', `F${r}*0.1`, vat);
-      // H: 청구금액
-      setFormula('H', `F${r}+G${r}`, total);
+      // B: 번호 (템플릿에 이미 1~20 들어있지만 안전하게 재기록)
+      setValue('B' + r, i + 1, 'n');
+      // C: 프로젝트ID (문자열 유지)
+      setValue('C' + r, row.b || '', 's');
+      // D: 프로젝트명(현장명)
+      setValue('D' + r, row.e || '', 's');
+      // E: 용량(kW) - 숫자
+      setValue('E' + r, cap === '' ? '' : cap, cap === '' ? 's' : 'n');
+      // F: 공급가(원) - 숫자. G/H 수식은 템플릿 그대로 → 자동 계산.
+      setValue('F' + r, baseFee, 'n');
       // I: 고객번호
-      set('I', row.j ? Utils.formatCustomerNumber(row.j) : '', 's');
-      // J: 은행
-      set('J', row.k || '', 's');
+      setValue('I' + r, row.j ? Utils.formatCustomerNumber(row.j) : '', 's');
+      // J: 은행 (템플릿에 '신한' 기본값이 있지만 실제 데이터로 덮어씀)
+      setValue('J' + r, row.k || '', 's');
       // K: 계좌
-      set('K', row.l ? Utils.formatAccountNumber(row.l) : '', 's');
-      // L: 참조 시트 M열값
-      set('L', central.m != null ? central.m : '', typeof central.m === 'number' ? 'n' : 's');
-      // M: 참조 시트 N열값
-      set('M', central.n != null ? central.n : '', typeof central.n === 'number' ? 'n' : 's');
-      // N: 참조 시트 O열값
-      set('N', central.o != null ? central.o : '', typeof central.o === 'number' ? 'n' : 's');
+      setValue('K' + r, row.l ? Utils.formatAccountNumber(row.l) : '', 's');
+      // L: 참조 M열값 (없으면 "-" 유지 — 샘플 참조)
+      const lVal = central.m != null && central.m !== '' ? central.m : '-';
+      setValue('L' + r, lVal, typeof lVal === 'number' ? 'n' : 's');
+      // M, N: 참조 N·O열값
+      if (central.n != null && central.n !== '') setValue('M' + r, central.n, typeof central.n === 'number' ? 'n' : 's');
+      if (central.o != null && central.o !== '') setValue('N' + r, central.o, typeof central.o === 'number' ? 'n' : 's');
     });
 
-    // 4) 시트 범위 확장
-    const lastRow = startRow + filtered.length - 1;
-    const ref = XLSX.utils.decode_range(ws['!ref'] || 'A1:N1');
-    ref.e.r = Math.max(ref.e.r, lastRow - 1);
-    ref.e.c = Math.max(ref.e.c, 13);
-    ws['!ref'] = XLSX.utils.encode_range(ref);
+    // 4) 데이터가 20행 미만이면 남는 행의 데이터 셀만 비움 (스타일·수식 유지)
+    //    G/H 는 수식이 F 를 참조하므로 F=0 이면 결과 0 → 그대로 둔다.
+    for (let i = rows.length; i < DATA_CAP; i++) {
+      const r = DATA_START + i;
+      ['C','D','E','F','I','K','L','M','N'].forEach(c => setValue(c + r, '', 's'));
+      // J 열은 템플릿 기본값 '신한'을 유지 — 덮지 않음
+      // B 열(번호)도 템플릿 기본값(1~20) 유지
+    }
 
-    // 5) 합계 행
-    const totalRow = lastRow + 1;
-    const sumBase = filtered.reduce((s, x) => s + parseFee(x.g), 0);
-    ws['B' + totalRow] = { v: '합계', t: 's' };
-    ws['F' + totalRow] = { f: `SUM(F${startRow}:F${lastRow})`, v: sumBase, t: 'n' };
-    ws['G' + totalRow] = { f: `SUM(G${startRow}:G${lastRow})`, v: Math.round(sumBase * 0.1), t: 'n' };
-    ws['H' + totalRow] = { f: `SUM(H${startRow}:H${lastRow})`, v: sumBase + Math.round(sumBase * 0.1), t: 'n' };
-    ref.e.r = Math.max(ref.e.r, totalRow - 1);
-    ws['!ref'] = XLSX.utils.encode_range(ref);
+    // 5) !ref / 합계 / 특이사항 영역은 템플릿 그대로.
+    //    H25 =SUM(H5:H24) 수식은 F5~F24 변경 반영해 자동 재계산.
+    //    (주의: XLSX.writeFile 로 저장할 때 수식 캐시값(v)이 미리 계산된 값이 아니면
+    //     엑셀이 열 때 수식을 평가해 최신값을 보여준다.)
 
     // 6) 저장
     const today = new Date();

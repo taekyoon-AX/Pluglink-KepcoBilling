@@ -331,18 +331,57 @@
             </div>
           </div>
 
-          <!-- Google Drive 폴더 (선택) -->
+          <!-- Google Drive 폴더 (3분류) -->
           <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px">
-            <div style="font-weight:600;color:#475569;margin-bottom:6px">☁️ Google Drive 폴더 (선택)</div>
-            <p class="muted" style="margin:0 0 10px">Apps Script 배포 계정이 이 폴더에 <strong>편집자 권한</strong>이 있어야 합니다. 로컬 폴더와 동시 저장 가능.</p>
-            <label>
-              <span>Google Drive 폴더 URL 또는 ID</span>
-              <input type="text" id="cfg-processed-folder" placeholder="https://drive.google.com/drive/folders/..." />
+            <div style="font-weight:600;color:#475569;margin-bottom:6px">☁️ Google Drive 폴더 — 사업구분별 3분류</div>
+            <p class="muted" style="margin:0 0 10px">
+              Apps Script 배포 계정이 각 폴더에 <strong>편집자 권한</strong>이 있어야 합니다.
+              프로젝트명 접두사(<code>25년환경부_</code>, <code>26년기후부_</code>, 그 외=민자)로 자동 라우팅됩니다.
+              <br><span style="color:#dc2626;font-weight:600">⚠ 반드시 Drive URL (https://drive.google.com/...) 또는 폴더 ID만 입력하세요. Windows 경로(G:\…)는 사용할 수 없습니다.</span>
+            </p>
+
+            <label style="display:block;margin-bottom:10px;">
+              <span style="font-weight:600;color:#16a34a;">🌱 25년환경부 폴더 URL/ID</span>
+              <input type="text" id="cfg-processed-folder-env25" placeholder="https://drive.google.com/drive/folders/..." />
+              <div style="margin-top:4px;">
+                <button class="small ghost" id="btn-folder-test-env25">접근 테스트</button>
+                <span id="folder-test-status-env25" class="muted" style="font-size:11px"></span>
+              </div>
             </label>
-            <div style="margin-top:8px;">
-              <button id="btn-folder-test">🔌 폴더 접근 테스트</button>
-              <span id="folder-test-status" class="muted"></span>
-            </div>
+
+            <label style="display:block;margin-bottom:10px;">
+              <span style="font-weight:600;color:#2563eb;">🌍 26년기후부 폴더 URL/ID</span>
+              <input type="text" id="cfg-processed-folder-climate26" placeholder="https://drive.google.com/drive/folders/..." />
+              <div style="margin-top:4px;">
+                <button class="small ghost" id="btn-folder-test-climate26">접근 테스트</button>
+                <span id="folder-test-status-climate26" class="muted" style="font-size:11px"></span>
+              </div>
+            </label>
+
+            <label style="display:block;margin-bottom:10px;">
+              <span style="font-weight:600;color:#9333ea;">🏢 민자사업 폴더 URL/ID</span>
+              <input type="text" id="cfg-processed-folder-private" placeholder="https://drive.google.com/drive/folders/..." />
+              <div style="margin-top:4px;">
+                <button class="small ghost" id="btn-folder-test-private">접근 테스트</button>
+                <span id="folder-test-status-private" class="muted" style="font-size:11px"></span>
+              </div>
+            </label>
+
+            <details style="margin-top:12px;border-top:1px dashed #cbd5e1;padding-top:10px;">
+              <summary class="muted" style="cursor:pointer;font-size:12px;">레거시 단일 폴더 (3분류 미설정 시 폴백)</summary>
+              <label style="display:block;margin-top:8px;">
+                <input type="text" id="cfg-processed-folder" placeholder="https://drive.google.com/drive/folders/..." />
+              </label>
+              <div style="margin-top:4px;">
+                <button class="small ghost" id="btn-folder-test">접근 테스트</button>
+                <span id="folder-test-status" class="muted" style="font-size:11px"></span>
+              </div>
+            </details>
+
+            <label style="display:flex;align-items:center;gap:6px;margin-top:14px;background:#fef3c7;padding:8px;border-radius:6px;">
+              <input type="checkbox" id="cfg-prompt-folder-on-confirm" />
+              <span style="font-size:13px;">✓ 확인 시마다 저장 폴더 재확인 다이얼로그 띄우기 (끄면 자동 라우팅만)</span>
+            </label>
           </div>
         </div>
 

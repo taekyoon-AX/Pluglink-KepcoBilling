@@ -400,4 +400,36 @@ const Utils = {
     }
     return `${idPart}_${namePart}${roundSuffix}${locPart}_파일.${ext}`;
   },
+
+  /**
+   * 사업 구분 자동 판정 → 'env25' | 'climate26' | 'private'
+   * 1순위: projectName 접두사 ("25년환경부_" / "26년기후부_" / "26년환경부_")
+   * 2순위: PM 시트에서 미리 주입된 sub.category 값(옵션)
+   * 그 외: 민자(private)
+   */
+  detectCategory(sub) {
+    if (!sub) return 'private';
+    const explicit = (sub.category || '').trim();
+    if (explicit) {
+      if (/26.*기후/.test(explicit)) return 'climate26';
+      if (/25.*환경/.test(explicit)) return 'env25';
+      if (/민자/.test(explicit)) return 'private';
+    }
+    const n = String(sub.projectName || '');
+    if (/^25년환경부_/.test(n)) return 'env25';
+    if (/^26년기후부_/.test(n) || /^26년환경부_/.test(n)) return 'climate26';
+    return 'private';
+  },
+
+  /**
+   * 카테고리 코드 → 사람 읽는 라벨
+   */
+  categoryLabel(code) {
+    switch (code) {
+      case 'env25':      return '25년환경부';
+      case 'climate26':  return '26년기후부';
+      case 'private':    return '민자사업';
+      default:           return '민자사업';
+    }
+  },
 };

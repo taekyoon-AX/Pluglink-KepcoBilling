@@ -26,8 +26,18 @@ const DEFAULT_CONFIG = {
   processingSheetGid: '',
   processingSheetName: '한전 표준시설부담금 납부내역(윤택)',
   // 처리완료 파일 저장 폴더 (관리자가 지정)
+  // 카테고리별 Drive 폴더 (3분류): 25년환경부 / 26년기후부 / 민자사업
+  processedFolderUrl_env25: '',
+  processedFolderId_env25: '',
+  processedFolderUrl_climate26: '',
+  processedFolderId_climate26: '',
+  processedFolderUrl_private: '',
+  processedFolderId_private: '',
+  // 레거시 단일 폴더 (3분류 미설정 시 폴백)
   processedFolderUrl: '',
   processedFolderId: '',
+  // 확인 시마다 저장 경로 재확인 다이얼로그 띄우기 (기본 ON)
+  promptFolderOnConfirm: true,
 };
 
 // ⚠️ 이 기본 계정은 Apps Script 미설정 시에만 테스트용으로 사용됨.

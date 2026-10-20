@@ -320,15 +320,42 @@
             <code>[프로젝트ID]_[현장명]_[차수]차[-N거점]/</code> 하위 폴더로 자동 저장됩니다.
           </p>
 
-          <!-- 로컬 폴더 (우선 적용) -->
+          <!-- 로컬 폴더 (3분류) -->
           <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px;margin-bottom:12px">
-            <div style="font-weight:600;color:#15803d;margin-bottom:6px">💻 로컬 폴더 (Windows PC 직접 저장)</div>
-            <p class="muted" style="margin:0 0 10px">폴더를 선택하면 처리 시 Google Drive 없이 PC에 직접 저장됩니다. Chrome / Edge 전용.</p>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-              <button id="btn-select-local-folder" class="primary">📂 폴더 선택</button>
-              <span id="local-folder-status" class="muted">미선택</span>
-              <button id="btn-clear-local-folder" class="ghost small" style="margin-left:auto">지우기</button>
+            <div style="font-weight:600;color:#15803d;margin-bottom:6px">💻 로컬 폴더 (Windows PC 직접 저장) — 사업구분별 3분류</div>
+            <p class="muted" style="margin:0 0 10px">
+              사업구분(25년환경부·26년기후부·민자사업)별로 각각 로컬 폴더를 지정하면 처리 시 자동 라우팅됩니다.
+              Chrome / Edge 전용. 미지정 카테고리는 아래 레거시(공통) 폴더로 폴백합니다.
+            </p>
+
+            <div style="display:grid;grid-template-columns:140px 1fr auto auto;gap:8px;align-items:center;margin-bottom:8px;">
+              <span style="font-weight:600;color:#16a34a;">🌱 25년환경부</span>
+              <span id="local-folder-status-env25" class="muted">미선택</span>
+              <button id="btn-select-local-folder-env25" class="primary small">📂 폴더 선택</button>
+              <button id="btn-clear-local-folder-env25" class="ghost small">지우기</button>
             </div>
+            <div style="display:grid;grid-template-columns:140px 1fr auto auto;gap:8px;align-items:center;margin-bottom:8px;">
+              <span style="font-weight:600;color:#2563eb;">🌍 26년기후부</span>
+              <span id="local-folder-status-climate26" class="muted">미선택</span>
+              <button id="btn-select-local-folder-climate26" class="primary small">📂 폴더 선택</button>
+              <button id="btn-clear-local-folder-climate26" class="ghost small">지우기</button>
+            </div>
+            <div style="display:grid;grid-template-columns:140px 1fr auto auto;gap:8px;align-items:center;margin-bottom:8px;">
+              <span style="font-weight:600;color:#9333ea;">🏢 민자사업</span>
+              <span id="local-folder-status-private" class="muted">미선택</span>
+              <button id="btn-select-local-folder-private" class="primary small">📂 폴더 선택</button>
+              <button id="btn-clear-local-folder-private" class="ghost small">지우기</button>
+            </div>
+
+            <details style="margin-top:10px;border-top:1px dashed #86efac;padding-top:8px;">
+              <summary class="muted" style="cursor:pointer;font-size:12px;">레거시 공통 로컬 폴더 (3분류 미지정 시 폴백)</summary>
+              <div style="display:grid;grid-template-columns:140px 1fr auto auto;gap:8px;align-items:center;margin-top:8px;">
+                <span style="color:#475569;font-size:13px;">공통 폴더</span>
+                <span id="local-folder-status" class="muted">미선택</span>
+                <button id="btn-select-local-folder" class="small">📂 폴더 선택</button>
+                <button id="btn-clear-local-folder" class="ghost small">지우기</button>
+              </div>
+            </details>
           </div>
 
           <!-- Google Drive 폴더 (3분류) -->

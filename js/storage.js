@@ -294,37 +294,50 @@ const LocalFolderDB = (() => {
     return dbPromise;
   }
 
+  // 저장 키: 레거시 'processed_folder' + 카테고리별 'processed_folder_<cat>'
+  const CAT_KEYS = ['env25', 'climate26', 'private'];
+  const keyOf = (cat) => cat ? `processed_folder_${cat}` : 'processed_folder';
+
   return {
-    async save(handle) {
+    async save(handle, cat) {
       const db = await openDB();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, 'readwrite');
-        tx.objectStore(STORE).put(handle, 'processed_folder');
+        tx.objectStore(STORE).put(handle, keyOf(cat));
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
       });
     },
-    async get() {
+    async get(cat) {
       const db = await openDB();
       return new Promise((resolve, reject) => {
-        const req = db.transaction(STORE, 'readonly').objectStore(STORE).get('processed_folder');
+        const req = db.transaction(STORE, 'readonly').objectStore(STORE).get(keyOf(cat));
         req.onsuccess = () => resolve(req.result || null);
         req.onerror = () => reject(req.error);
       });
     },
-    async clear() {
+    async clear(cat) {
       const db = await openDB();
       return new Promise((resolve, reject) => {
         const tx = db.transaction(STORE, 'readwrite');
-        tx.objectStore(STORE).delete('processed_folder');
+        tx.objectStore(STORE).delete(keyOf(cat));
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
       });
     },
-    // 저장된 핸들의 폴더명 반환 (없으면 null)
-    async getName() {
-      const h = await this.get().catch(() => null);
+    async getName(cat) {
+      const h = await this.get(cat).catch(() => null);
       return h ? h.name : null;
     },
+    // 모든 카테고리 폴더명 { env25, climate26, private, legacy } 반환
+    async getAllNames() {
+      const out = {};
+      for (const cat of CAT_KEYS) {
+        out[cat] = await this.getName(cat);
+      }
+      out.legacy = await this.getName();
+      return out;
+    },
+    CAT_KEYS,
   };
 })();

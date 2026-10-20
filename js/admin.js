@@ -53,14 +53,16 @@ const AdminView = {
     });
     document.getElementById('btn-select-local-folder').onclick = () => this.selectLocalFolder();
     document.getElementById('btn-clear-local-folder').onclick = () => this.clearLocalFolder();
-
-    // 저장된 로컬 폴더명 표시
-    LocalFolderDB.getName().then(name => {
-      const el = document.getElementById('local-folder-status');
-      if (el) el.innerHTML = name
-        ? `<span style="color:var(--success)">✓ ${name}</span>`
-        : '미선택';
+    // 카테고리별 로컬 폴더 선택/제거 바인딩
+    ['env25','climate26','private'].forEach(cat => {
+      const selBtn = document.getElementById('btn-select-local-folder-' + cat);
+      const clrBtn = document.getElementById('btn-clear-local-folder-' + cat);
+      if (selBtn) selBtn.onclick = () => this.selectLocalFolder(cat);
+      if (clrBtn) clrBtn.onclick = () => this.clearLocalFolder(cat);
     });
+
+    // 저장된 로컬 폴더명 표시 (3분류 + 레거시)
+    this._refreshLocalFolderStatus();
     document.getElementById('btn-add-contractor').onclick = () => this.addContractor();
 
     document.getElementById('filter-contractor').onchange = () => this.renderDashboard();
@@ -537,10 +539,9 @@ const AdminView = {
     const anyCategoryFolder = !!(cfg.processedFolderId_env25 || cfg.processedFolderId_climate26 || cfg.processedFolderId_private);
     const driveConfigured = !!(Sync.enabled() && (anyCategoryFolder || cfg.processedFolderId));
 
-    // 로컬 폴더 핸들 (있으면 가져옴)
-    let localHandle = null;
-    try { localHandle = await this.getLocalFolderHandle(); } catch (e) { localHandle = null; }
-    const localConfigured = !!localHandle;
+    // 로컬 폴더: 3분류 중 하나라도 설정됐거나 레거시 공통 폴더가 있으면 활성화
+    const localNames = await LocalFolderDB.getAllNames().catch(() => ({}));
+    const localConfigured = !!(localNames.env25 || localNames.climate26 || localNames.private || localNames.legacy);
 
     if (!driveConfigured && !localConfigured) {
       alert('처리완료 폴더가 설정되지 않았습니다.\nDrive 폴더 또는 PC 로컬 폴더를 설정해주세요.');
@@ -644,10 +645,13 @@ const AdminView = {
         }
       }
 
-      // ── PC 로컬 저장 ──
+      // ── PC 로컬 저장 (sub 카테고리별 폴더 라우팅) ──
       if (localConfigured) {
         try {
-          const projHandle = await localHandle.getDirectoryHandle(folderName, { create: true });
+          const rep0 = targetSubs[0];
+          const pickedLocal = await this._pickLocalFolderHandle(rep0);
+          if (!pickedLocal.handle) throw new Error(`${Utils.categoryLabel(pickedLocal.category)} 로컬 폴더 미설정`);
+          const projHandle = await pickedLocal.handle.getDirectoryHandle(folderName, { create: true });
           const fh = await projHandle.getFileHandle(fileName, { create: true });
           const writable = await fh.createWritable();
           await writable.write(newPdfBytes);
@@ -2314,27 +2318,41 @@ const AdminView = {
   // 로컬 폴더 (File System Access API)
   // ──────────────────────────────────────────────────
 
-  /** 폴더 선택 다이얼로그 → IndexedDB 저장 */
-  async selectLocalFolder() {
+  /** 폴더 선택 다이얼로그 → IndexedDB 저장. cat 없으면 레거시 공통 폴더 */
+  async selectLocalFolder(cat) {
     if (!window.showDirectoryPicker) {
       alert('이 브라우저는 로컬 폴더 직접 저장을 지원하지 않습니다.\nChrome 또는 Edge 최신 버전을 사용해주세요.');
       return;
     }
     try {
       const handle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'desktop' });
-      await LocalFolderDB.save(handle);
-      const el = document.getElementById('local-folder-status');
-      if (el) el.innerHTML = `<span style="color:var(--success)">✓ ${handle.name}</span>`;
+      await LocalFolderDB.save(handle, cat);
+      this._refreshLocalFolderStatus();
     } catch (e) {
       if (e.name !== 'AbortError') alert('폴더 선택 실패: ' + e.message);
     }
   },
 
-  /** 로컬 폴더 설정 해제 */
-  async clearLocalFolder() {
-    await LocalFolderDB.clear();
-    const el = document.getElementById('local-folder-status');
-    if (el) el.textContent = '미선택';
+  /** 로컬 폴더 설정 해제. cat 없으면 레거시 공통 폴더 */
+  async clearLocalFolder(cat) {
+    await LocalFolderDB.clear(cat);
+    this._refreshLocalFolderStatus();
+  },
+
+  /** 모든 로컬 폴더 상태 라벨 재갱신 */
+  async _refreshLocalFolderStatus() {
+    const names = await LocalFolderDB.getAllNames().catch(() => ({}));
+    const set = (elId, name) => {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      el.innerHTML = name
+        ? `<span style="color:var(--success)">✓ ${name}</span>`
+        : '미선택';
+    };
+    set('local-folder-status-env25',     names.env25);
+    set('local-folder-status-climate26', names.climate26);
+    set('local-folder-status-private',   names.private);
+    set('local-folder-status',           names.legacy);
   },
 
   /**
@@ -2361,9 +2379,9 @@ const AdminView = {
     console.log(`✓ ${others.length}개 거점 처리완료 동기화 (${sub.projectId})`);
   },
 
-  /** 저장된 핸들 반환 (권한 없으면 자동 요청) */
-  async getLocalFolderHandle() {
-    const handle = await LocalFolderDB.get().catch(() => null);
+  /** 저장된 핸들 반환 (권한 없으면 자동 요청). cat 지정 시 해당 카테고리, 아니면 레거시 */
+  async getLocalFolderHandle(cat) {
+    const handle = await LocalFolderDB.get(cat).catch(() => null);
     if (!handle) return null;
     try {
       const perm = await handle.queryPermission({ mode: 'readwrite' });
@@ -2376,11 +2394,26 @@ const AdminView = {
   },
 
   /**
+   * sub의 카테고리에 맞는 로컬 폴더 핸들 반환.
+   * 1순위: 카테고리별 핸들 → 2순위: 레거시 공통 핸들
+   */
+  async _pickLocalFolderHandle(sub) {
+    const cat = Utils.detectCategory(sub);
+    const h = await this.getLocalFolderHandle(cat);
+    if (h) return { handle: h, category: cat, source: 'category' };
+    const legacy = await this.getLocalFolderHandle();
+    if (legacy) return { handle: legacy, category: cat, source: 'legacy' };
+    return { handle: null, category: cat, source: 'none' };
+  },
+
+  /**
    * PC 로컬 폴더에 처리완료 파일 저장 (File System Access API)
    * Drive 저장과 독립적으로 동작 — 둘 다 설정돼 있으면 동시 저장
    */
   async copyToLocalFolder(sub) {
-    const folderHandle = await this.getLocalFolderHandle();
+    // sub 의 사업구분에 맞는 로컬 폴더 핸들 자동 선택
+    const picked = await this._pickLocalFolderHandle(sub);
+    const folderHandle = picked.handle;
     if (!folderHandle) return null;
 
     const cfg = Storage.getConfig();

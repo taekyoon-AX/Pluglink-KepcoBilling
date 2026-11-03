@@ -2959,35 +2959,25 @@ const AdminView = {
     await wb.xlsx.load(templateBuf);
     const ws = wb.worksheets[0];
 
-    // 2) M·N·O(엑셀 L·M·N) 값 — 환경부 출금계좌 참조 시트에서 조회
-    //    대기번호 컬럼도 이 참조 시트에서 함께 조회 (중앙 시트 아님)
-    const colM = (cfg.billingRefColM || 'AU').toUpperCase();
-    const colN = (cfg.billingRefColN || 'AV').toUpperCase();
-    const colO = (cfg.billingRefColO || 'AW').toUpperCase();
-    const useRef = !!cfg.billingRefSheetUrl;
-    const refUrl  = useRef ? cfg.billingRefSheetUrl  : cfg.centralProjectSheetUrl;
-    const refGid  = useRef ? cfg.billingRefSheetGid  : cfg.centralProjectSheetGid;
-    const refName = useRef ? cfg.billingRefSheetName : cfg.centralProjectSheetName;
-
-    let centralMap = {};
-    if (Sync.enabled() && refUrl) {
-      const projectIds = [...new Set(rows.map(r => r.b).filter(Boolean))];
-      const r = await Sync.lookupCentralColumns(refUrl, refGid, refName, projectIds, [colM, colN, colO]);
-      if (r.ok && r.map) {
-        Object.keys(r.map).forEach(pid => {
-          const hit = r.map[pid];
-          centralMap[pid] = { m: hit[colM] ?? '', n: hit[colN] ?? '', o: hit[colO] ?? '' };
-        });
-      } else if (!r.ok) {
-        console.warn('M·N·O 참조 시트 lookup 실패:', r.error);
-      }
-    }
+    // Excel 이 파일 열 때 수식 전체 재계산하도록 플래그 세팅
+    // (SharedFormula 캐시 결과가 0으로 남아있는 문제 방지)
+    wb.calcProperties = wb.calcProperties || {};
+    wb.calcProperties.fullCalcOnLoad = true;
 
     const parseFee = v => Number(String(v || '').replace(/[^0-9.-]/g, '')) || 0;
     const parseCap = v => {
       const n = Number(String(v || '').replace(/[^0-9.]/g, ''));
       return isNaN(n) ? '' : n;
     };
+
+    // 2) 헤더 보강 — L4/M4/N4 라벨 (템플릿엔 비어있음)
+    const h = (addr, label) => {
+      const cell = ws.getCell(addr);
+      cell.value = label;
+    };
+    h('L4', '차수');
+    h('M4', '은행');
+    h('N4', '계좌번호');
 
     // 3) 셀 값만 교체 (스타일/수식/병합/열너비 전부 보존)
     const setVal = (addr, value) => {
@@ -2997,33 +2987,53 @@ const AdminView = {
 
     rows.forEach((row, i) => {
       const r = DATA_START + i;
-      const central = centralMap[row.b] || {};
       const baseFee = parseFee(row.g);
+      const vat     = Math.round(baseFee * 0.1);
+      const total   = baseFee + vat;
       const cap     = parseCap(row.f);
+      const parsedPN = Utils.parseProjectName(row.e || '');
+      const roundLabel = parsedPN.round ? `${parsedPN.round}차` : '';
 
       setVal('B' + r, i + 1);
       setVal('C' + r, row.b || '');
       setVal('D' + r, row.e || '');
       setVal('E' + r, cap === '' ? null : cap);
       setVal('F' + r, baseFee);
-      // G/H 는 템플릿의 수식 =F*0.1 / =F+G 그대로 유지 — 건드리지 않음
+      // G/H 는 수식 유지 + 캐시 결과값 즉시 채움 (수식 유지, 열 때 recalc 와 무관하게 바로 보임)
+      ws.getCell('G' + r).value = { formula: `F${r}*0.1`, result: vat };
+      ws.getCell('H' + r).value = { formula: `F${r}+G${r}`, result: total };
       setVal('I' + r, row.j ? Utils.formatCustomerNumber(row.j) : '');
       setVal('J' + r, row.k || '');
       setVal('K' + r, row.l ? Utils.formatAccountNumber(row.l) : '');
-      const lVal = central.m != null && central.m !== '' ? central.m : '-';
-      setVal('L' + r, lVal);
-      if (central.n != null && central.n !== '') setVal('M' + r, central.n);
-      if (central.o != null && central.o !== '') setVal('N' + r, central.o);
+      // L/M/N — 차수 · 은행 · 계좌번호 (요청 반영)
+      setVal('L' + r, roundLabel);
+      setVal('M' + r, row.k || '');
+      setVal('N' + r, row.l ? Utils.formatAccountNumber(row.l) : '');
     });
 
-    // 4) 데이터가 20행 미만이면 남는 데이터 행의 값만 지움 (스타일/수식/번호 유지)
+    // 4) 데이터가 20행 미만이면 남는 행의 값 지움 + G/H 캐시도 0 으로 리셋
     for (let i = rows.length; i < DATA_CAP; i++) {
       const r = DATA_START + i;
       ['C','D','E','F','I','K','L','M','N'].forEach(c => setVal(c + r, null));
+      ws.getCell('G' + r).value = { formula: `F${r}*0.1`, result: 0 };
+      ws.getCell('H' + r).value = { formula: `F${r}+G${r}`, result: 0 };
       // J (은행 '신한' 기본값), B (번호) 는 템플릿 유지
     }
 
-    // 5) 저장
+    // 5) 25행 합계 수식 결과도 즉시 반영 (SUM(H5:H24) 캐시 갱신)
+    const sumTotal = rows.reduce((s, row) => {
+      const bf = parseFee(row.g);
+      return s + bf + Math.round(bf * 0.1);
+    }, 0);
+    ws.getCell('H25').value = { formula: 'SUM(H5:H24)', result: sumTotal };
+
+    // 6) C열(프로젝트ID) 셀 정렬 일괄 통일 — 템플릿 상 행마다 다른 정렬이 섞여있어 통일
+    for (let r = DATA_START; r <= DATA_END; r++) {
+      const c = ws.getCell('C' + r);
+      c.alignment = { horizontal: 'center', vertical: 'middle' };
+    }
+
+    // 7) 저장
     const buf = await wb.xlsx.writeBuffer();
     const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const today = new Date();

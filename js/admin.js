@@ -2505,9 +2505,10 @@ const AdminView = {
 
   /**
    * 임시 저장 로컬 폴더에 단일 파일 쓰기.
-   * 구조: staging/[사업구분]/[프로젝트ID_현장명_차수차[-거점]]/[파일명]
+   * 구조: staging/[사업구분]/[프로젝트ID_현장명_차수차]/[파일명]
    *   사업구분: 25년환경부 / 26년기후부 / 민자사업 (Utils.detectCategory → categoryLabel)
-   *   폴더명/파일명 루틴은 getProjectIdent / getFileName 그대로.
+   *   폴더명: 거점 suffix 제외 (여러 거점을 한 폴더에 묶음)
+   *   파일명: 거점별로 구분 (getFileName 이 locPart 포함)
    * 성공: {ok:true, category, folder, name}  / 미설정·실패: {ok:false, error}
    */
   async writeToStagingFolder(sub, docType, file) {
@@ -2517,9 +2518,10 @@ const AdminView = {
     // 1단계: 사업구분 폴더
     const catCode  = Utils.detectCategory(sub);
     const catLabel = Utils.categoryLabel(catCode); // 25년환경부 / 26년기후부 / 민자사업
-    // 2단계: 프로젝트 폴더 (sub.location 그대로)
-    const folderName = Utils.getProjectIdent(sub);
-    // 파일명: 원본 확장자 유지
+    // 2단계: 프로젝트 폴더 — 거점 suffix 제거해서 같은 프로젝트의 모든 거점을 한 폴더에 묶음
+    const subNoLoc = { ...sub, location: '' };
+    const folderName = Utils.getProjectIdent(subNoLoc);
+    // 파일명: 원본 sub 그대로 (거점 suffix 유지하여 거점별 구분)
     const origExt = (file.name || '').match(/\.[^.]+$/);
     const extGuess = origExt ? origExt[0].slice(1) : (docType === 'notes' ? 'txt' : 'pdf');
     const fileName = Utils.getFileName(sub, docType, 'a.' + extGuess, {});

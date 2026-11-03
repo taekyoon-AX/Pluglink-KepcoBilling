@@ -19,6 +19,13 @@
   <script>if (window.pdfjsLib) { pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }</script>
 </head>
 <body>
+  <!-- ============= 포털 섹션 전환 바 (관리자 로그인 시만 노출) ============= -->
+  <div id="portal-bar" class="portal-bar" hidden>
+    <div class="portal-bar-inner">
+      <span class="portal-label">📎 섹션:</span>
+      <div id="portal-bar-tabs" class="portal-bar-tabs"></div>
+    </div>
+  </div>
   <!-- PLUGLINK 로고 SVG 정의 (img/logo.png 저장 시 자동으로 이미지 우선 사용) -->
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <defs>
@@ -553,6 +560,19 @@
           </div>
 
           <div id="contractor-password-list"></div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
+          <h3>📎 포털 섹션 — 상단 전환 바에 노출할 시공사</h3>
+          <p class="muted" style="margin-bottom:10px">
+            로그아웃 없이 상단 바에서 <strong>관리자 ↔ 각 시공사 뷰</strong>를 즉시 전환할 수 있습니다.
+            맨 첫 섹션은 항상 <strong>관리자</strong>로 고정이고, 아래 체크한 시공사만 섹션으로 표시됩니다.
+          </p>
+          <div id="portal-sections-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px;"></div>
+          <p class="muted" style="font-size:12px;margin-top:8px">
+            ※ 시공사 섹션으로 전환해도 로그아웃되지 않습니다. 관리자 권한의 Apps Script 토큰 그대로 사용합니다.
+            시공사 섹션에서 '일괄 제출'을 누르면 선택한 시공사 이름으로 납부대기 시트에 기록됩니다.
+          </p>
         </div>
 
         <div class="card" style="grid-column: 1 / -1;">

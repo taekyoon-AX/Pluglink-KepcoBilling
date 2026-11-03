@@ -3,6 +3,10 @@
 // ============================================================
 
 const App = {
+  // 포털 뷰잉 컨텍스트 (관리자가 특정 시공사 섹션으로 전환했을 때 설정)
+  _viewAsContractor: null,
+  _currentSection: 'admin',
+
   init() {
     // 로그인 버튼
     document.getElementById('btn-login').onclick = () => this.handleLogin();
@@ -26,6 +30,7 @@ const App = {
   async route() {
     const auth = Auth.current();
     if (!auth) {
+      this.hidePortalBar();
       this.showView('login');
       return;
     }
@@ -40,9 +45,15 @@ const App = {
     }
 
     if (auth.role === 'admin') {
+      // 관리자 로그인 → 포털 전환 바 노출 (기본 섹션은 관리자)
+      this._currentSection = 'admin';
+      this._viewAsContractor = null;
+      this.renderPortalBar();
       this.showView('admin');
       AdminView.init();
     } else if (auth.role === 'contractor') {
+      // 시공사 직접 로그인 → 포털 바 숨김 (기존 동작)
+      this.hidePortalBar();
       this.showView('contractor');
       ContractorView.init();
     }
@@ -51,6 +62,91 @@ const App = {
   showView(name) {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     document.getElementById(`view-${name}`).classList.add('active');
+  },
+
+  hidePortalBar() {
+    const bar = document.getElementById('portal-bar');
+    if (bar) bar.hidden = true;
+  },
+
+  /**
+   * 포털 전환 바 렌더 — 관리자 로그인 상태일 때만 호출.
+   * [관리자] [시공사A] [시공사B] ... 버튼 생성.
+   */
+  renderPortalBar() {
+    const auth = Auth.current();
+    if (!auth || auth.role !== 'admin') { this.hidePortalBar(); return; }
+
+    const bar = document.getElementById('portal-bar');
+    const tabsEl = document.getElementById('portal-bar-tabs');
+    if (!bar || !tabsEl) return;
+
+    const cfg = Storage.getConfig();
+    const portalIds = cfg.portalContractors || [];
+    const contractors = Storage.getContractors();
+    const byId = {};
+    contractors.forEach(c => { byId[c.id] = c; });
+
+    const sections = [{ key: 'admin', label: '🛠 관리자', isAdmin: true }];
+    portalIds.forEach(id => {
+      const c = byId[id];
+      if (c) sections.push({ key: 'contractor:' + id, label: c.name, contractor: c });
+    });
+
+    tabsEl.innerHTML = sections.map(s => {
+      const cls = ['tab-btn'];
+      if (s.isAdmin) cls.push('admin-tab');
+      if (s.key === this._currentSection) cls.push('active');
+      return `<button class="${cls.join(' ')}" data-section="${s.key}">${s.label}</button>`;
+    }).join('');
+
+    tabsEl.querySelectorAll('button').forEach(btn => {
+      btn.onclick = () => this.switchSection(btn.dataset.section);
+    });
+
+    bar.hidden = false;
+  },
+
+  /**
+   * 섹션 전환: 'admin' 또는 'contractor:<id>'
+   */
+  async switchSection(key) {
+    const auth = Auth.current();
+    if (!auth || auth.role !== 'admin') return;
+    if (key === this._currentSection) return;
+
+    this._currentSection = key;
+    if (key === 'admin') {
+      this._viewAsContractor = null;
+      this.showView('admin');
+      AdminView.init();
+    } else if (key.startsWith('contractor:')) {
+      const id = key.slice('contractor:'.length);
+      const c = Storage.getContractors().find(x => x.id === id);
+      if (!c) {
+        alert('시공사 정보를 찾을 수 없습니다: ' + id);
+        this.switchSection('admin');
+        return;
+      }
+      this._viewAsContractor = {
+        id: c.id,
+        name: c.name,
+        projectSheetUrl: c.projectSheetUrl || '',
+        projectSheetGid: c.projectSheetGid || '',
+        viewAs: true,
+      };
+      this.showView('contractor');
+      await ContractorView.init(this._viewAsContractor);
+    }
+    this.renderPortalBar(); // active 상태 갱신
+  },
+
+  /**
+   * ContractorView 등 다른 모듈에서 호출. 뷰잉-애즈 모드면 그 ctx 를 반환,
+   * 아니면 실제 Auth.current() 반환.
+   */
+  effectiveContractorAuth() {
+    return this._viewAsContractor || Auth.current();
   },
 
   async handleLogin() {

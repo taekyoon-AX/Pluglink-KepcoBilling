@@ -77,6 +77,36 @@ button.small { padding: 4px 8px; font-size: 12px; }
 button.btn-paid { background: #16a34a; color: white; border-color: #16a34a; }
 button.btn-paid:hover { background: #15803d; }
 
+/* ============= 포털 섹션 전환 바 ============= */
+.portal-bar {
+  position: sticky; top: 0; z-index: 100;
+  background: linear-gradient(90deg, #0F1C2E 0%, #1e3a5f 100%);
+  color: #fff;
+  border-bottom: 2px solid #0066FF;
+  box-shadow: 0 2px 6px rgba(0,0,0,.1);
+}
+.portal-bar[hidden] { display: none !important; }
+.portal-bar-inner {
+  display: flex; align-items: center; gap: 14px;
+  padding: 8px max(24px, calc((100vw - 1280px) / 2));
+  flex-wrap: wrap;
+}
+.portal-label { font-size: 12px; font-weight: 600; color: rgba(255,255,255,.75); }
+.portal-bar-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.portal-bar-tabs button {
+  background: rgba(255,255,255,.1); color: #fff;
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 6px; padding: 5px 12px; cursor: pointer;
+  font-size: 13px; font-weight: 500;
+  transition: background .15s, border-color .15s;
+}
+.portal-bar-tabs button:hover { background: rgba(255,255,255,.2); border-color: rgba(255,255,255,.35); }
+.portal-bar-tabs button.active {
+  background: #0066FF; border-color: #0066FF; color: #fff;
+  box-shadow: 0 0 0 2px rgba(0,102,255,.3);
+}
+.portal-bar-tabs button.admin-tab { font-weight: 700; }
+
 /* ============= 상단 바 ============= */
 .topbar {
   background: var(--surface);
@@ -101,6 +131,7 @@ button.btn-paid:hover { background: #15803d; }
 }
 .badge.admin { background: #fef3c7; color: #92400e; }
 .badge.contractor { background: #dcfce7; color: #166534; }
+.badge.contractor.viewas { background: #fef9c3; color: #713f12; border: 1px dashed #ca8a04; }
 .tabs { display: flex; gap: 4px; }
 .tab {
   background: transparent; border: none;

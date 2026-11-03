@@ -38,6 +38,9 @@ const DEFAULT_CONFIG = {
   processedFolderId: '',
   // 확인 시마다 저장 경로 재확인 다이얼로그 띄우기 (기본 ON)
   promptFolderOnConfirm: true,
+  // 포털 섹션: 관리자 로그인 시 상단 전환 바에 노출할 시공사 ID 목록
+  // (관리자 섹션은 항상 첫 번째 섹션으로 고정, 이 배열엔 포함하지 않는다)
+  portalContractors: [],
 };
 
 // ⚠️ 이 기본 계정은 Apps Script 미설정 시에만 테스트용으로 사용됨.

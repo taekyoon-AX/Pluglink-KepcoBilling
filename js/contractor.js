@@ -7,18 +7,44 @@ const ContractorView = {
   locRowCount: 0,
   pendingFiles: {},  // { blockId: { applicationReceipt: File, locations: { locId: { feeNotice: File } } } }
   remoteProjects: {},  // contractor's project sheet (id -> name)
+  ctx: null,         // 관리자가 포털 전환으로 시공사 뷰 열었을 때의 ctx
 
-  async init() {
-    const auth = Auth.current();
-    document.getElementById('contractor-badge').textContent = auth.name;
-    document.getElementById('contractor-badge').className = 'badge contractor';
+  /**
+   * 현재 뷰잉 중인 시공사 신원 반환.
+   * - ctx 가 있으면 (관리자 뷰잉) ctx 사용
+   * - 아니면 실제 로그인한 시공사(Auth.current())
+   */
+  _auth() {
+    if (this.ctx) return this.ctx;
+    return Auth.current();
+  },
+
+  /**
+   * ctx: 관리자가 포털 전환으로 시공사 뷰를 열 때 전달.
+   *      { id, name, projectSheetUrl, projectSheetGid, viewAs: true }
+   *      ctx 가 없으면 Auth.current() 사용 (시공사 직접 로그인)
+   */
+  async init(ctx) {
+    this.ctx = ctx || null;
+    const auth = this._auth();
+    const badge = document.getElementById('contractor-badge');
+    badge.textContent = auth.name + (this.ctx ? ' (관리자 뷰잉)' : '');
+    badge.className = 'badge contractor' + (this.ctx ? ' viewas' : '');
 
     // 탭 바인딩
     document.querySelectorAll('#view-contractor .tab').forEach(btn => {
       btn.onclick = () => this.switchTab(btn.dataset.tab);
     });
 
-    document.getElementById('btn-contractor-logout').onclick = () => App.logout();
+    // 뷰잉-애즈 모드: 로그아웃 대신 '관리자로 복귀' 버튼
+    const logoutBtn = document.getElementById('btn-contractor-logout');
+    if (this.ctx) {
+      logoutBtn.textContent = '← 관리자로';
+      logoutBtn.onclick = () => App.switchSection('admin');
+    } else {
+      logoutBtn.textContent = '로그아웃';
+      logoutBtn.onclick = () => App.logout();
+    }
     document.getElementById('btn-add-row').onclick = () => this.addProjectBlock();
     document.getElementById('btn-submit-all').onclick = () => this.submitAll();
     document.getElementById('btn-import-excel').onclick = () => {
@@ -46,9 +72,12 @@ const ContractorView = {
   },
 
   async loadContractorProjects() {
-    const auth = Auth.current();
+    const auth = this._auth();
     const globalCfg = Storage.getConfig();
-    const contractorCfg = Storage.getContractorConfig(auth.id);
+    // ctx 가 있으면 ctx 의 시트 정보 우선, 없으면 Storage 에서 조회
+    const contractorCfg = this.ctx
+      ? { name: this.ctx.name, projectSheetUrl: this.ctx.projectSheetUrl, projectSheetGid: this.ctx.projectSheetGid }
+      : Storage.getContractorConfig(auth.id);
     const sourceEl = document.getElementById('contractor-project-source');
 
     // 1순위: 중앙 프로젝트 시트 (시공사별 필터)
@@ -341,7 +370,7 @@ const ContractorView = {
 
   // ================== 일괄 제출 ==================
   async submitAll() {
-    const auth = Auth.current();
+    const auth = this._auth();
     const blocks = document.querySelectorAll('#submit-rows .project-block');
     const cfg = Storage.getConfig();
     const errors = [];
@@ -634,14 +663,31 @@ const ContractorView = {
       Sync.readPendingRows('', '', ''),
     ]);
 
+    // 관리자 뷰잉-애즈 모드이면 서버가 전체 반환하므로 A열(시공사)로 클라 필터
+    const auth = this._auth();
+    const nrm = (s) => String(s || '').replace(/\s+/g, '').toLowerCase();
+    const target = nrm(auth.name || auth.id);
+    const filterByContractor = (rows) => {
+      if (!this.ctx) return rows; // 시공사 직접 로그인은 서버에서 이미 필터됨
+      return rows.filter(r => {
+        const a = nrm(r.a);
+        if (!a || !target) return false;
+        const tokens = a.split(/[,/·|]/).map(t => t.trim()).filter(Boolean);
+        if (tokens.length > 1) {
+          return tokens.some(t => t === target || t.indexOf(target) >= 0 || target.indexOf(t) >= 0);
+        }
+        return a === target || a.indexOf(target) >= 0 || target.indexOf(a) >= 0;
+      });
+    };
+
     if (paidRes.ok) {
-      this._paymentHistoryRows = [...(paidRes.rows || [])].reverse();
+      this._paymentHistoryRows = [...filterByContractor(paidRes.rows || [])].reverse();
     } else {
       this._paymentHistoryRows = [];
       console.warn('납부내역 로드 실패:', paidRes.error);
     }
     if (pendingRes.ok) {
-      this._pendingHistoryRows = [...(pendingRes.rows || [])].reverse();
+      this._pendingHistoryRows = [...filterByContractor(pendingRes.rows || [])].reverse();
     } else {
       this._pendingHistoryRows = [];
       // 납부대기 시트 미설정은 경고 수준 (필수 X)

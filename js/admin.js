@@ -1909,6 +1909,18 @@ const AdminView = {
       </div>
     `).join('') + (isServer ? '<p class="muted" style="margin-top:6px">🔒 서버 모드: 비밀번호는 Apps Script에만 저장됩니다. 변경할 계정의 비번란에 새 값을 입력하고 <strong>설정 저장</strong>을 누르세요.</p>' : '');
 
+    // 포털 섹션 체크리스트 — 상단 전환 바에 노출할 시공사 선택
+    const portalListEl = document.getElementById('portal-sections-list');
+    if (portalListEl) {
+      const selected = new Set(cfg.portalContractors || []);
+      portalListEl.innerHTML = contractors.map(c => `
+        <label style="display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;background:#f8fafc;cursor:pointer;">
+          <input type="checkbox" class="portal-section-chk" value="${c.id}" ${selected.has(c.id) ? 'checked' : ''} />
+          <span>${c.name}</span>
+        </label>
+      `).join('') || '<p class="muted">등록된 시공사가 없습니다.</p>';
+    }
+
     // 동기화 URL
     document.getElementById('cfg-sync-url').value = Sync.getUrl();
 
@@ -2100,7 +2112,16 @@ const AdminView = {
     cfg.processedFolderId  = this._extractFolderId(folderInput);
     const promptChk = document.getElementById('cfg-prompt-folder-on-confirm');
     cfg.promptFolderOnConfirm = promptChk ? !!promptChk.checked : true;
+
+    // 포털 섹션 저장 — 체크된 시공사 ID 목록
+    const portalChks = document.querySelectorAll('.portal-section-chk');
+    cfg.portalContractors = Array.from(portalChks)
+      .filter(c => c.checked)
+      .map(c => c.value);
+
     Storage.setConfig(cfg);
+    // 포털 바 즉시 재렌더 (App 가 로드돼있을 때)
+    if (typeof App !== 'undefined' && App.renderPortalBar) App.renderPortalBar();
 
     const msg = document.getElementById('settings-saved');
     msg.textContent = '✓ 저장되었습니다.';

@@ -484,7 +484,7 @@ const ContractorView = {
           const sr = await AdminView.writeToStagingFolder(item.data, docType, file);
           if (sr.ok) {
             stagingCount++;
-            item.data.files[docType + 'StagingPath'] = `${sr.folder}/${sr.name}`;
+            item.data.files[docType + 'StagingPath'] = `${sr.category}/${sr.folder}/${sr.name}`;
           }
         }
 

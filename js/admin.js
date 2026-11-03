@@ -1524,7 +1524,7 @@ const AdminView = {
       const stagingHandle = await this.getLocalFolderHandle('staging').catch(() => null);
       if (stagingHandle) {
         const sr = await this.writeToStagingFolder(sub, 'transferReceipt', file);
-        if (sr.ok) files.transferReceiptStagingPath = `${sr.folder}/${sr.name}`;
+        if (sr.ok) files.transferReceiptStagingPath = `${sr.category}/${sr.folder}/${sr.name}`;
       }
 
       // 클라우드 업로드 — 임시 저장 폴더 설정 + skip 토글 ON 이면 생략
@@ -2454,27 +2454,33 @@ const AdminView = {
 
   /**
    * 임시 저장 로컬 폴더에 단일 파일 쓰기.
-   * 폴더명/파일명은 getProjectIdent / getFileName 루틴 그대로.
-   * 성공: {ok:true, folder, name}  / 미설정·실패: {ok:false, error}
+   * 구조: staging/[사업구분]/[프로젝트ID_현장명_차수차[-거점]]/[파일명]
+   *   사업구분: 25년환경부 / 26년기후부 / 민자사업 (Utils.detectCategory → categoryLabel)
+   *   폴더명/파일명 루틴은 getProjectIdent / getFileName 그대로.
+   * 성공: {ok:true, category, folder, name}  / 미설정·실패: {ok:false, error}
    */
   async writeToStagingFolder(sub, docType, file) {
     const stagingHandle = await this.getLocalFolderHandle('staging');
     if (!stagingHandle) return { ok: false, error: 'staging_not_configured' };
 
-    // 폴더명: getProjectIdent (sub.location 그대로 반영)
+    // 1단계: 사업구분 폴더
+    const catCode  = Utils.detectCategory(sub);
+    const catLabel = Utils.categoryLabel(catCode); // 25년환경부 / 26년기후부 / 민자사업
+    // 2단계: 프로젝트 폴더 (sub.location 그대로)
     const folderName = Utils.getProjectIdent(sub);
-    // 파일명: 원본 확장자 유지 (업로드 당시 pdf/jpg 등 그대로)
+    // 파일명: 원본 확장자 유지
     const origExt = (file.name || '').match(/\.[^.]+$/);
     const extGuess = origExt ? origExt[0].slice(1) : (docType === 'notes' ? 'txt' : 'pdf');
     const fileName = Utils.getFileName(sub, docType, 'a.' + extGuess, {});
 
     try {
-      const projHandle = await stagingHandle.getDirectoryHandle(folderName, { create: true });
+      const catHandle  = await stagingHandle.getDirectoryHandle(catLabel,   { create: true });
+      const projHandle = await catHandle.getDirectoryHandle(folderName,     { create: true });
       const fh = await projHandle.getFileHandle(fileName, { create: true });
       const writable = await fh.createWritable();
       await writable.write(file);
       await writable.close();
-      return { ok: true, folder: folderName, name: fileName };
+      return { ok: true, category: catLabel, folder: folderName, name: fileName };
     } catch (e) {
       console.warn('임시 저장 폴더 쓰기 실패:', e);
       return { ok: false, error: e.message || String(e) };

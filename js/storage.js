@@ -41,6 +41,11 @@ const DEFAULT_CONFIG = {
   // 포털 섹션: 관리자 로그인 시 상단 전환 바에 노출할 시공사 ID 목록
   // (관리자 섹션은 항상 첫 번째 섹션으로 고정, 이 배열엔 포함하지 않는다)
   portalContractors: [],
+  // 임시 저장 로컬 폴더 (검토 단계) — 관리자가 받은 고지서/접수증을 1차 저장할 PC 폴더.
+  // 폴더명은 getProjectIdent, 파일명은 getFileName 루틴 그대로 적용.
+  // 시공사별 분할 없음 — 평평한 하나의 폴더에 프로젝트 하위폴더만 생성.
+  stagingLocalFolderHint: 'C:\\Users\\김택윤\\Desktop\\한전표준시설부담금 관련',
+  stagingSkipDriveAtReview: true,
 };
 
 // ⚠️ 이 기본 계정은 Apps Script 미설정 시에만 테스트용으로 사용됨.
@@ -297,9 +302,16 @@ const LocalFolderDB = (() => {
     return dbPromise;
   }
 
-  // 저장 키: 레거시 'processed_folder' + 카테고리별 'processed_folder_<cat>'
+  // 저장 키:
+  //   'processed_folder'                 - 레거시 공통 처리완료 폴더
+  //   'processed_folder_<cat>'            - 카테고리별 처리완료 폴더
+  //   'staging'                           - 임시(검토) 저장 폴더 (3분류 없음)
   const CAT_KEYS = ['env25', 'climate26', 'private'];
-  const keyOf = (cat) => cat ? `processed_folder_${cat}` : 'processed_folder';
+  const keyOf = (cat) => {
+    if (!cat) return 'processed_folder';
+    if (cat === 'staging') return 'staging';
+    return `processed_folder_${cat}`;
+  };
 
   return {
     async save(handle, cat) {
@@ -332,13 +344,14 @@ const LocalFolderDB = (() => {
       const h = await this.get(cat).catch(() => null);
       return h ? h.name : null;
     },
-    // 모든 카테고리 폴더명 { env25, climate26, private, legacy } 반환
+    // 모든 카테고리 폴더명 { env25, climate26, private, legacy, staging } 반환
     async getAllNames() {
       const out = {};
       for (const cat of CAT_KEYS) {
         out[cat] = await this.getName(cat);
       }
-      out.legacy = await this.getName();
+      out.legacy  = await this.getName();
+      out.staging = await this.getName('staging');
       return out;
     },
     CAT_KEYS,

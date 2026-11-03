@@ -459,6 +459,15 @@ const ContractorView = {
     const autoLocations = Utils.assignAutoLocations(toSubmit.map(t => t.data));
     toSubmit.forEach((t, i) => { t.data.location = autoLocations[i]; });
 
+    // 임시 저장 로컬 폴더 활성 여부 — 관리자(또는 뷰잉-애즈) 상태에서만 의미 있음
+    const stagingEnabled = this.ctx || (Auth.current() && Auth.current().role === 'admin');
+    const stagingSkipDrive = stagingEnabled && cfg.stagingSkipDriveAtReview !== false;
+    let stagingHandle = null;
+    if (stagingEnabled && typeof AdminView !== 'undefined' && AdminView.getLocalFolderHandle) {
+      stagingHandle = await AdminView.getLocalFolderHandle('staging').catch(() => null);
+    }
+    let stagingCount = 0;
+
     const msgEl = document.getElementById('submit-msg');
     for (let i = 0; i < toSubmit.length; i++) {
       const item = toSubmit[i];
@@ -470,7 +479,17 @@ const ContractorView = {
         await FileDB.save(fileId, file);
         item.data.files[docType] = fileId;
 
-        if (Sync.enabled()) {
+        // 임시 저장 폴더에 1차 저장 (사업구분 무관, 평평)
+        if (stagingHandle && AdminView.writeToStagingFolder) {
+          const sr = await AdminView.writeToStagingFolder(item.data, docType, file);
+          if (sr.ok) {
+            stagingCount++;
+            item.data.files[docType + 'StagingPath'] = `${sr.folder}/${sr.name}`;
+          }
+        }
+
+        // Drive 업로드 — 임시 저장 활성 && 토글 ON 이면 생략
+        if (Sync.enabled() && !stagingSkipDrive) {
           const up = await Sync.uploadFile(file, item.data, docType);
           if (up.ok) {
             item.data.files[docType] = up.fileId;
@@ -510,8 +529,11 @@ const ContractorView = {
       }
     }
 
+    const stagingNote = stagingHandle
+      ? ` <span class="muted">· 📝 임시폴더에 ${stagingCount}개 파일 저장${stagingSkipDrive ? ' (Drive 업로드 생략 — 확인완료 시 이관)' : ''}</span>`
+      : '';
     msgEl.innerHTML =
-      `<span class="info">✓ ${toSubmit.length}건이 제출되었습니다. 처리예정일: ${Utils.describeDate(toSubmit[0].data.scheduledProcessDate)}</span>`;
+      `<span class="info">✓ ${toSubmit.length}건이 제출되었습니다. 처리예정일: ${Utils.describeDate(toSubmit[0].data.scheduledProcessDate)}</span>${stagingNote}`;
 
     // 폼 초기화
     this.projectBlockCount = 0;

@@ -327,6 +327,27 @@
             <code>[프로젝트ID]_[현장명]_[차수]차[-N거점]/</code> 하위 폴더로 자동 저장됩니다.
           </p>
 
+          <!-- 임시 저장 로컬 폴더 (검토 단계 — 단일, 평평) -->
+          <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:14px;margin-bottom:12px">
+            <div style="font-weight:600;color:#92400e;margin-bottom:6px">📝 임시 저장 로컬 폴더 (검토 단계 1차 저장)</div>
+            <p class="muted" style="margin:0 0 10px">
+              접수증·고지서를 받아 올릴 때 Drive 업로드를 생략하고 <strong>지정 PC 폴더에 바로 저장</strong>합니다.
+              폴더/파일명 규칙(<code>[프로젝트ID]_[현장명]_[차수]차[-거점]</code>)은 지금 저장되는 루틴 그대로 적용됩니다. <strong>시공사별 분할 없음.</strong>
+              <br>확인완료(납부완료) 시 자동으로 사업구분별 Drive 폴더로 이관됩니다.
+              <br><span class="muted" style="font-size:11px;">※ 권장 폴더: <code id="staging-folder-hint">C:\Users\김택윤\Desktop\한전표준시설부담금 관련</code></span>
+            </p>
+            <div style="display:grid;grid-template-columns:140px 1fr auto auto;gap:8px;align-items:center;margin-bottom:8px;">
+              <span style="font-weight:600;color:#b45309;">임시 저장 폴더</span>
+              <span id="staging-folder-status" class="muted">미선택</span>
+              <button id="btn-select-staging-folder" class="primary small">📂 폴더 선택</button>
+              <button id="btn-clear-staging-folder" class="ghost small">지우기</button>
+            </div>
+            <label style="display:flex;align-items:center;gap:6px;margin-top:8px;background:#fffbeb;padding:8px;border-radius:6px;">
+              <input type="checkbox" id="cfg-staging-skip-drive" />
+              <span style="font-size:13px;">✓ 검토 단계에서 Drive 업로드 생략 (임시 폴더에만 1차 저장) — 확인완료 시 Drive로 이관</span>
+            </label>
+          </div>
+
           <!-- 로컬 폴더 (3분류) -->
           <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:14px;margin-bottom:12px">
             <div style="font-weight:600;color:#15803d;margin-bottom:6px">💻 로컬 폴더 (Windows PC 직접 저장) — 사업구분별 3분류</div>

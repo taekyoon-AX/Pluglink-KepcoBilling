@@ -60,8 +60,13 @@ const AdminView = {
       if (selBtn) selBtn.onclick = () => this.selectLocalFolder(cat);
       if (clrBtn) clrBtn.onclick = () => this.clearLocalFolder(cat);
     });
+    // 임시 저장 로컬 폴더 바인딩 (3분류와 별도)
+    const stgSel = document.getElementById('btn-select-staging-folder');
+    const stgClr = document.getElementById('btn-clear-staging-folder');
+    if (stgSel) stgSel.onclick = () => this.selectLocalFolder('staging');
+    if (stgClr) stgClr.onclick = () => this.clearLocalFolder('staging');
 
-    // 저장된 로컬 폴더명 표시 (3분류 + 레거시)
+    // 저장된 로컬 폴더명 표시 (3분류 + 레거시 + 임시)
     this._refreshLocalFolderStatus();
     document.getElementById('btn-add-contractor').onclick = () => this.addContractor();
 
@@ -1515,8 +1520,17 @@ const AdminView = {
       const sub = Storage.getSubmissions().find(s => s.id === id);
       const files = { ...(sub.files || {}), transferReceipt: fileId };
 
-      // 클라우드 업로드
-      if (Sync.enabled()) {
+      // 임시 저장 폴더에 1차 저장 (설정된 경우)
+      const stagingHandle = await this.getLocalFolderHandle('staging').catch(() => null);
+      if (stagingHandle) {
+        const sr = await this.writeToStagingFolder(sub, 'transferReceipt', file);
+        if (sr.ok) files.transferReceiptStagingPath = `${sr.folder}/${sr.name}`;
+      }
+
+      // 클라우드 업로드 — 임시 저장 폴더 설정 + skip 토글 ON 이면 생략
+      const cfg = Storage.getConfig();
+      const skipDrive = !!stagingHandle && cfg.stagingSkipDriveAtReview !== false;
+      if (Sync.enabled() && !skipDrive) {
         const up = await Sync.uploadFile(file, sub, 'transferReceipt');
         if (up.ok) {
           files.transferReceipt = up.fileId;
@@ -1969,6 +1983,12 @@ const AdminView = {
     document.getElementById('cfg-processed-folder').value = cfg.processedFolderUrl || '';
     const promptChk = document.getElementById('cfg-prompt-folder-on-confirm');
     if (promptChk) promptChk.checked = cfg.promptFolderOnConfirm !== false;
+
+    // 임시 저장 로컬 폴더 — hint + skip 토글
+    const hintEl = document.getElementById('staging-folder-hint');
+    if (hintEl && cfg.stagingLocalFolderHint) hintEl.textContent = cfg.stagingLocalFolderHint;
+    const stgSkipChk = document.getElementById('cfg-staging-skip-drive');
+    if (stgSkipChk) stgSkipChk.checked = cfg.stagingSkipDriveAtReview !== false;
   },
 
   saveSettings() {
@@ -2112,6 +2132,10 @@ const AdminView = {
     cfg.processedFolderId  = this._extractFolderId(folderInput);
     const promptChk = document.getElementById('cfg-prompt-folder-on-confirm');
     cfg.promptFolderOnConfirm = promptChk ? !!promptChk.checked : true;
+
+    // 임시 저장 로컬 폴더 토글
+    const stgSkipChk = document.getElementById('cfg-staging-skip-drive');
+    cfg.stagingSkipDriveAtReview = stgSkipChk ? !!stgSkipChk.checked : true;
 
     // 포털 섹션 저장 — 체크된 시공사 ID 목록
     const portalChks = document.querySelectorAll('.portal-section-chk');
@@ -2374,6 +2398,7 @@ const AdminView = {
     set('local-folder-status-climate26', names.climate26);
     set('local-folder-status-private',   names.private);
     set('local-folder-status',           names.legacy);
+    set('staging-folder-status',         names.staging);
   },
 
   /**
@@ -2425,6 +2450,35 @@ const AdminView = {
     const legacy = await this.getLocalFolderHandle();
     if (legacy) return { handle: legacy, category: cat, source: 'legacy' };
     return { handle: null, category: cat, source: 'none' };
+  },
+
+  /**
+   * 임시 저장 로컬 폴더에 단일 파일 쓰기.
+   * 폴더명/파일명은 getProjectIdent / getFileName 루틴 그대로.
+   * 성공: {ok:true, folder, name}  / 미설정·실패: {ok:false, error}
+   */
+  async writeToStagingFolder(sub, docType, file) {
+    const stagingHandle = await this.getLocalFolderHandle('staging');
+    if (!stagingHandle) return { ok: false, error: 'staging_not_configured' };
+
+    // 폴더명: getProjectIdent (sub.location 그대로 반영)
+    const folderName = Utils.getProjectIdent(sub);
+    // 파일명: 원본 확장자 유지 (업로드 당시 pdf/jpg 등 그대로)
+    const origExt = (file.name || '').match(/\.[^.]+$/);
+    const extGuess = origExt ? origExt[0].slice(1) : (docType === 'notes' ? 'txt' : 'pdf');
+    const fileName = Utils.getFileName(sub, docType, 'a.' + extGuess, {});
+
+    try {
+      const projHandle = await stagingHandle.getDirectoryHandle(folderName, { create: true });
+      const fh = await projHandle.getFileHandle(fileName, { create: true });
+      const writable = await fh.createWritable();
+      await writable.write(file);
+      await writable.close();
+      return { ok: true, folder: folderName, name: fileName };
+    } catch (e) {
+      console.warn('임시 저장 폴더 쓰기 실패:', e);
+      return { ok: false, error: e.message || String(e) };
+    }
   },
 
   /**

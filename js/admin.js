@@ -2673,7 +2673,7 @@ const AdminView = {
       .sort((a, b) => (a.submittedAt || '').localeCompare(b.submittedAt || ''));
 
     const groupSize = sameProject.length;
-    // 대표 rep: location = N거점(다중) or ''(단일)
+    // 대표 rep: location = N거점(다중) or ''(단일) — 폴더명/파일명에 적용
     const rep = { ...sub };
     rep.location = groupSize > 1 ? `${groupSize}거점` : '';
     const folderName = Utils.getProjectIdent(rep);
@@ -2694,7 +2694,6 @@ const AdminView = {
     }
 
     // ── 고지서: 모든 거점 수집 후 병합 ──
-    // 고지서·이체증 파일명에 대기번호 필요 시 billingRef(환경부 출금계좌 참조) 시트 조회
     const waitingCol = (cfg.waitingNumberColumn || 'A').toUpperCase();
     const feeNoticeSubs = sameProject.filter(s => s.files && (s.files.feeNotice || s.files.feeNoticeUrl));
     const transferSubsPresent = sameProject.some(s => s.files && (s.files.transferReceipt || s.files.transferReceiptUrl));
@@ -2707,7 +2706,6 @@ const AdminView = {
       if (r.ok && r.map[sub.projectId]) extra = { waitingNumber: r.map[sub.projectId][waitingCol] || '' };
     }
     if (feeNoticeSubs.length === 1) {
-      // 단일 → Drive 직접 복사 (빠름, 다운로드 불필요)
       const driveId = this._driveIdFrom(feeNoticeSubs[0].files.feeNotice, feeNoticeSubs[0].files.feeNoticeUrl);
       if (driveId) {
         files.push({ sourceFileId: driveId, name: Utils.getFileName(rep, 'feeNotice', 'a.pdf', extra) });
@@ -2716,7 +2714,6 @@ const AdminView = {
         if (buf) files.push({ base64: this._arrayBufferToBase64(buf), mimeType: 'application/pdf', name: Utils.getFileName(rep, 'feeNotice', 'a.pdf', extra) });
       }
     } else if (feeNoticeSubs.length > 1) {
-      // 다중 → 다운로드 + 병합
       const buffers = [];
       for (const s of feeNoticeSubs) {
         const buf = await this._fetchFileBuf(s.files.feeNotice, s.files.feeNoticeUrl);
@@ -2787,10 +2784,34 @@ const AdminView = {
       const failCount = r.results.length - okCount;
       console.log(`✓ 처리완료 폴더 복사: ${okCount}/${r.results.length}개 → ${r.folder}`, r.folderUrl);
       if (failCount > 0) console.warn('일부 파일 복사 실패:', r.results.filter(x => !x.ok));
+      // Drive 업로드 성공 → 임시 폴더에서 해당 프로젝트 폴더 삭제 (이동 효과)
+      if (failCount === 0) {
+        const rm = await this._removeStagingProjectFolder(sub);
+        if (rm.ok) console.log(`✓ 임시 폴더에서 삭제: ${rm.folder}`);
+      }
     } else {
       console.warn('처리완료 폴더 복사 실패:', r.error);
     }
     return r;
+  },
+
+  /**
+   * 임시 저장 폴더에서 해당 프로젝트의 폴더 전체를 삭제 (확인완료 성공 시 호출).
+   * 구조: staging/[사업구분]/[프로젝트폴더]/*
+   */
+  async _removeStagingProjectFolder(sub) {
+    const stagingHandle = await this.getLocalFolderHandle('staging').catch(() => null);
+    if (!stagingHandle) return { ok: false, reason: 'no_staging' };
+    const catLabel = Utils.categoryLabel(Utils.detectCategory(sub));
+    const folderName = Utils.getProjectIdent({ ...sub, location: '' });
+    try {
+      const catHandle = await stagingHandle.getDirectoryHandle(catLabel, { create: false });
+      await catHandle.removeEntry(folderName, { recursive: true });
+      return { ok: true, folder: `${catLabel}/${folderName}` };
+    } catch (e) {
+      // 폴더가 없거나 접근 실패 — 이미 지워졌을 수도 있음 (silent)
+      return { ok: false, error: e.message || String(e) };
+    }
   },
 
   async centralSheetTest() {

@@ -576,14 +576,15 @@ const AdminView = {
 
     statusEl.textContent = '⏳ 대기번호 조회 중...';
 
-    // 대기번호 일괄 조회 (파일명에 사용)
+    // 대기번호 일괄 조회 (파일명에 사용) — billingRef 참조시트 우선
     const waitingCol = (cfg.waitingNumberColumn || 'A').toUpperCase();
     const projIds = distributable.map(([p]) => p);
     let waitingMap = {};
-    if (Sync.enabled() && cfg.centralProjectSheetUrl && projIds.length > 0) {
+    const waitSrc = this._waitingLookupSource();
+    if (Sync.enabled() && waitSrc && projIds.length > 0) {
       try {
         const wr = await Sync.lookupCentralColumns(
-          cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
+          waitSrc.url, waitSrc.gid, waitSrc.name,
           projIds, [waitingCol],
         );
         if (wr.ok && wr.map) {
@@ -770,14 +771,41 @@ const AdminView = {
     const cfg = Storage.getConfig();
     if (!Sync.enabled() || !cfg.centralProjectSheetUrl) return null;
 
+    const waitingCol = (cfg.waitingNumberColumn || 'A').toUpperCase();
     const cols = this._getProjectDetailCols().map(c => c.col);
-    const r = await Sync.lookupCentralColumns(
-      cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
-      [String(projectId)], cols,
-    );
-    if (r.ok && r.map && r.map[projectId]) {
-      this._projectDetailsCache[projectId] = r.map[projectId];
-      return r.map[projectId];
+    // 대기번호 라벨 컬럼은 billingRef 참조시트에서, 나머지는 중앙시트에서 조회
+    const nonWaitCols = cols.filter(c => c !== waitingCol);
+
+    const detailMap = {};
+    if (nonWaitCols.length > 0) {
+      const r = await Sync.lookupCentralColumns(
+        cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
+        [String(projectId)], nonWaitCols,
+      );
+      if (r.ok && r.map && r.map[projectId]) Object.assign(detailMap, r.map[projectId]);
+    }
+    // 대기번호 — billingRef 참조시트 (설정됐을 때)
+    if (cols.includes(waitingCol)) {
+      const waitSrc = this._waitingLookupSource();
+      if (waitSrc && (waitSrc.url !== cfg.centralProjectSheetUrl)) {
+        const wr = await Sync.lookupCentralColumns(
+          waitSrc.url, waitSrc.gid, waitSrc.name,
+          [String(projectId)], [waitingCol],
+        );
+        if (wr.ok && wr.map && wr.map[projectId]) detailMap[waitingCol] = wr.map[projectId][waitingCol];
+      } else {
+        // billingRef 미설정 → 중앙시트에서 대기번호도 함께 조회
+        const wr2 = await Sync.lookupCentralColumns(
+          cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
+          [String(projectId)], [waitingCol],
+        );
+        if (wr2.ok && wr2.map && wr2.map[projectId]) detailMap[waitingCol] = wr2.map[projectId][waitingCol];
+      }
+    }
+
+    if (Object.keys(detailMap).length > 0) {
+      this._projectDetailsCache[projectId] = detailMap;
+      return detailMap;
     }
     return { __empty: true };
   },
@@ -2254,6 +2282,29 @@ const AdminView = {
   },
 
   /**
+   * 대기번호 lookup 소스 결정 — billingRef(환경부 출금계좌 참조) 우선, 없으면 중앙 시트.
+   * 반환: { url, gid, name } 또는 null
+   */
+  _waitingLookupSource() {
+    const cfg = Storage.getConfig();
+    if (cfg.billingRefSheetUrl) {
+      return {
+        url:  cfg.billingRefSheetUrl,
+        gid:  cfg.billingRefSheetGid,
+        name: cfg.billingRefSheetName,
+      };
+    }
+    if (cfg.centralProjectSheetUrl) {
+      return {
+        url:  cfg.centralProjectSheetUrl,
+        gid:  cfg.centralProjectSheetGid,
+        name: cfg.centralProjectSheetName,
+      };
+    }
+    return null;
+  },
+
+  /**
    * sub의 카테고리에 맞는 Drive 폴더 ID 반환.
    * 1순위: 카테고리별 설정 (processedFolderId_env25 등)
    * 2순위: 레거시 단일 설정 (processedFolderId)
@@ -2641,13 +2692,14 @@ const AdminView = {
     }
 
     // ── 고지서: 모든 거점 수집 후 병합 ──
-    // 고지서·이체증 파일명에 대기번호가 필요할 때만 중앙시트 조회
+    // 고지서·이체증 파일명에 대기번호 필요 시 billingRef(환경부 출금계좌 참조) 시트 조회
     const waitingCol = (cfg.waitingNumberColumn || 'A').toUpperCase();
     const feeNoticeSubs = sameProject.filter(s => s.files && (s.files.feeNotice || s.files.feeNoticeUrl));
     const transferSubsPresent = sameProject.some(s => s.files && (s.files.transferReceipt || s.files.transferReceiptUrl));
-    if ((feeNoticeSubs.length > 0 || transferSubsPresent) && cfg.centralProjectSheetUrl) {
+    const waitSrc = this._waitingLookupSource();
+    if ((feeNoticeSubs.length > 0 || transferSubsPresent) && waitSrc) {
       const r = await Sync.lookupCentralColumns(
-        cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
+        waitSrc.url, waitSrc.gid, waitSrc.name,
         [sub.projectId], [waitingCol]
       );
       if (r.ok && r.map[sub.projectId]) extra = { waitingNumber: r.map[sub.projectId][waitingCol] || '' };
@@ -2875,8 +2927,8 @@ const AdminView = {
 
     const cfg = Storage.getConfig();
 
-    // 템플릿: 5~24행 (총 20행) 데이터 영역, 25행에 =SUM(H5:H24) 합계,
-    // 26~32행 특이사항 영역. 템플릿 구조 보존 — 수식·스타일·합계 손대지 않음.
+    // 템플릿: 5~24행 데이터 영역, 25행 합계(SUM(H5:H24)), 26~32 특이사항.
+    // ExcelJS 로 로드해 셀 .value 만 교체 → 폰트/테두리/병합/열너비/수식 모두 보존.
     const DATA_START = 5;
     const DATA_END   = 24;
     const DATA_CAP   = DATA_END - DATA_START + 1; // 20
@@ -2885,6 +2937,12 @@ const AdminView = {
       if (!confirm(`전체 제출 ${filtered.length}건이 양식의 최대 ${DATA_CAP}행을 초과합니다.\n앞 ${DATA_CAP}건만 출력됩니다. 계속할까요?`)) return;
     }
     const rows = filtered.slice(0, DATA_CAP);
+
+    // ExcelJS 로드 확인
+    if (!window.ExcelJS) {
+      alert('ExcelJS 라이브러리가 로드되지 않았습니다. 페이지를 새로고침해주세요.');
+      return;
+    }
 
     // 1) 양식 파일 로드
     let templateBuf;
@@ -2897,10 +2955,12 @@ const AdminView = {
       return;
     }
 
-    const wb = XLSX.read(templateBuf, { type: 'array', cellStyles: true });
-    const ws = wb.Sheets[wb.SheetNames[0]];
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(templateBuf);
+    const ws = wb.worksheets[0];
 
-    // 2) M·N·O 참조 시트 lookup (옵션)
+    // 2) M·N·O(엑셀 L·M·N) 값 — 환경부 출금계좌 참조 시트에서 조회
+    //    대기번호 컬럼도 이 참조 시트에서 함께 조회 (중앙 시트 아님)
     const colM = (cfg.billingRefColM || 'AU').toUpperCase();
     const colN = (cfg.billingRefColN || 'AV').toUpperCase();
     const colO = (cfg.billingRefColO || 'AW').toUpperCase();
@@ -2929,72 +2989,46 @@ const AdminView = {
       return isNaN(n) ? '' : n;
     };
 
-    // 3) 템플릿 셀 스타일 유지 — 각 셀의 .s 는 그대로 두고 .v / .t 만 교체
-    //    G·H 열은 템플릿의 shared formula (=F*0.1, =F+G) 그대로 유지.
-    const setValue = (addr, value, type) => {
-      const existing = ws[addr] || {};
-      // t='n' 숫자, 's' 문자열. value가 ''이면 셀을 비움(값만 제거, 스타일 유지)
-      const style = existing.s;
-      if (value === '' || value == null) {
-        // 셀 값 비우기: v / t 제거, 스타일만 보존
-        if (style) ws[addr] = { s: style };
-        else delete ws[addr];
-        return;
-      }
-      const cell = { v: value, t: type || 's' };
-      if (style) cell.s = style;
-      ws[addr] = cell;
+    // 3) 셀 값만 교체 (스타일/수식/병합/열너비 전부 보존)
+    const setVal = (addr, value) => {
+      const cell = ws.getCell(addr);
+      cell.value = value;
     };
 
     rows.forEach((row, i) => {
       const r = DATA_START + i;
       const central = centralMap[row.b] || {};
-
       const baseFee = parseFee(row.g);
       const cap     = parseCap(row.f);
 
-      // B: 번호 (템플릿에 이미 1~20 들어있지만 안전하게 재기록)
-      setValue('B' + r, i + 1, 'n');
-      // C: 프로젝트ID (문자열 유지)
-      setValue('C' + r, row.b || '', 's');
-      // D: 프로젝트명(현장명)
-      setValue('D' + r, row.e || '', 's');
-      // E: 용량(kW) - 숫자
-      setValue('E' + r, cap === '' ? '' : cap, cap === '' ? 's' : 'n');
-      // F: 공급가(원) - 숫자. G/H 수식은 템플릿 그대로 → 자동 계산.
-      setValue('F' + r, baseFee, 'n');
-      // I: 고객번호
-      setValue('I' + r, row.j ? Utils.formatCustomerNumber(row.j) : '', 's');
-      // J: 은행 (템플릿에 '신한' 기본값이 있지만 실제 데이터로 덮어씀)
-      setValue('J' + r, row.k || '', 's');
-      // K: 계좌
-      setValue('K' + r, row.l ? Utils.formatAccountNumber(row.l) : '', 's');
-      // L: 참조 M열값 (없으면 "-" 유지 — 샘플 참조)
+      setVal('B' + r, i + 1);
+      setVal('C' + r, row.b || '');
+      setVal('D' + r, row.e || '');
+      setVal('E' + r, cap === '' ? null : cap);
+      setVal('F' + r, baseFee);
+      // G/H 는 템플릿의 수식 =F*0.1 / =F+G 그대로 유지 — 건드리지 않음
+      setVal('I' + r, row.j ? Utils.formatCustomerNumber(row.j) : '');
+      setVal('J' + r, row.k || '');
+      setVal('K' + r, row.l ? Utils.formatAccountNumber(row.l) : '');
       const lVal = central.m != null && central.m !== '' ? central.m : '-';
-      setValue('L' + r, lVal, typeof lVal === 'number' ? 'n' : 's');
-      // M, N: 참조 N·O열값
-      if (central.n != null && central.n !== '') setValue('M' + r, central.n, typeof central.n === 'number' ? 'n' : 's');
-      if (central.o != null && central.o !== '') setValue('N' + r, central.o, typeof central.o === 'number' ? 'n' : 's');
+      setVal('L' + r, lVal);
+      if (central.n != null && central.n !== '') setVal('M' + r, central.n);
+      if (central.o != null && central.o !== '') setVal('N' + r, central.o);
     });
 
-    // 4) 데이터가 20행 미만이면 남는 행의 데이터 셀만 비움 (스타일·수식 유지)
-    //    G/H 는 수식이 F 를 참조하므로 F=0 이면 결과 0 → 그대로 둔다.
+    // 4) 데이터가 20행 미만이면 남는 데이터 행의 값만 지움 (스타일/수식/번호 유지)
     for (let i = rows.length; i < DATA_CAP; i++) {
       const r = DATA_START + i;
-      ['C','D','E','F','I','K','L','M','N'].forEach(c => setValue(c + r, '', 's'));
-      // J 열은 템플릿 기본값 '신한'을 유지 — 덮지 않음
-      // B 열(번호)도 템플릿 기본값(1~20) 유지
+      ['C','D','E','F','I','K','L','M','N'].forEach(c => setVal(c + r, null));
+      // J (은행 '신한' 기본값), B (번호) 는 템플릿 유지
     }
 
-    // 5) !ref / 합계 / 특이사항 영역은 템플릿 그대로.
-    //    H25 =SUM(H5:H24) 수식은 F5~F24 변경 반영해 자동 재계산.
-    //    (주의: XLSX.writeFile 로 저장할 때 수식 캐시값(v)이 미리 계산된 값이 아니면
-    //     엑셀이 열 때 수식을 평가해 최신값을 보여준다.)
-
-    // 6) 저장
+    // 5) 저장
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const today = new Date();
     const ymd = Utils.toYMD(today);
-    XLSX.writeFile(wb, `한전표준시설부담금납부_${ymd}.xlsx`);
+    saveAs(blob, `한전표준시설부담금납부_${ymd}.xlsx`);
 
     cfg.lastExcelExport = new Date().toISOString();
     Storage.setConfig(cfg);
@@ -3078,16 +3112,15 @@ const AdminView = {
     };
 
     try {
-      // 1) 중앙 시트에서 대기번호 lookup
+      // 1) 대기번호 lookup — billingRef 참조시트 우선
       let centralMap = {};
       const zipWaitingCol = (cfg.waitingNumberColumn || 'A').toUpperCase();
-      if (Sync.enabled() && cfg.centralProjectSheetUrl) {
-        btn.textContent = '⏳ 중앙 시트 조회 중...';
+      const zipWaitSrc = this._waitingLookupSource();
+      if (Sync.enabled() && zipWaitSrc) {
+        btn.textContent = '⏳ 참조 시트에서 대기번호 조회 중...';
         const projectIds = [...new Set(submissions.map(s => s.projectId))];
         const r = await Sync.lookupCentralColumns(
-          cfg.centralProjectSheetUrl,
-          cfg.centralProjectSheetGid,
-          cfg.centralProjectSheetName,
+          zipWaitSrc.url, zipWaitSrc.gid, zipWaitSrc.name,
           projectIds,
           [zipWaitingCol],
         );

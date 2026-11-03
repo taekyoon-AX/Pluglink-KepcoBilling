@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>한전불입금 관리 시스템 - Pluglink</title>
   <link rel="stylesheet" href="css/style.css" />
-  <!-- SheetJS for Excel export -->
+  <!-- SheetJS for Excel export (읽기·엑셀업로드 파싱용) -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- ExcelJS: 양식 서식 완전 보존 쓰기 (admin exportExcel 전용) -->
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
   <!-- JSZip for zipped file download -->
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
@@ -461,15 +463,6 @@
               <input type="text" id="cfg-central-name" placeholder="PM_영차영차new" />
             </label>
           </div>
-          <div style="margin-top:10px;display:grid;grid-template-columns:200px 1fr;gap:8px;align-items:center;">
-            <label style="display:flex;flex-direction:column;gap:2px;">
-              <span style="font-size:12px;color:var(--muted);">대기번호 컬럼</span>
-              <input type="text" id="cfg-waiting-col" placeholder="예: A, F, K …" style="text-transform:uppercase" />
-            </label>
-            <p class="muted" style="font-size:11px;margin:0;">
-              고지서·이체증 파일명의 <code>(대기번호)</code>와 대시보드 펼치기의 '대기번호' 값을 가져올 컬럼. 비워두면 'A'.
-            </p>
-          </div>
           <div style="margin-top:8px;">
             <button id="btn-central-test">🔌 시공사별 매칭 테스트</button>
             <span id="central-test-status" class="muted"></span>
@@ -504,7 +497,7 @@
               <input type="text" id="cfg-billingref-name" placeholder="PM_25년환경부입찰" />
             </label>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:8px;">
             <label>
               <span>M열 ← 컬럼</span>
               <input type="text" id="cfg-billingref-col-m" placeholder="AU" />
@@ -517,7 +510,14 @@
               <span>O열 ← 컬럼</span>
               <input type="text" id="cfg-billingref-col-o" placeholder="AW" />
             </label>
+            <label>
+              <span>대기번호 ← 컬럼</span>
+              <input type="text" id="cfg-waiting-col" placeholder="예: A, F, K …" style="text-transform:uppercase" />
+            </label>
           </div>
+          <p class="muted" style="font-size:11px;margin:6px 0 0;">
+            대기번호 컬럼은 이 참조시트에서 조회됩니다. 고지서·이체증 파일명의 <code>(대기번호)</code> 와 대시보드 펼치기의 '대기번호' 값에 사용. 비워두면 'A'.
+          </p>
           <div style="margin-top:8px;">
             <button id="btn-billingref-test">🔌 참조 시트 테스트</button>
             <span id="billingref-test-status" class="muted"></span>

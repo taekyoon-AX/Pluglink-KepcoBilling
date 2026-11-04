@@ -45,12 +45,7 @@ const AdminView = {
     document.getElementById('btn-central-test').onclick = () => this.centralSheetTest();
     const billingRefTestBtn = document.getElementById('btn-billingref-test');
     if (billingRefTestBtn) billingRefTestBtn.onclick = () => this.billingRefTest();
-    document.getElementById('btn-folder-test').onclick = () => this.folderAccessTest();
-    const cats = ['env25','climate26','private'];
-    cats.forEach(cat => {
-      const btn = document.getElementById('btn-folder-test-' + cat);
-      if (btn) btn.onclick = () => this.folderAccessTestCategory(cat);
-    });
+    // Drive 폴더 UI 는 제거됨 (로컬 전용 운영) — 바인딩도 스킵
     document.getElementById('btn-select-local-folder').onclick = () => this.selectLocalFolder();
     document.getElementById('btn-clear-local-folder').onclick = () => this.clearLocalFolder();
     // 카테고리별 로컬 폴더 선택/제거 바인딩
@@ -1222,9 +1217,8 @@ const AdminView = {
     await this._refreshDashboardData();
 
     const saveLines = [];
-    if (driveConfigured) saveLines.push(`☁️ Drive 폴더: ${driveSaved}개 저장${driveFailed > 0 ? ` (실패 ${driveFailed})` : ''}`);
     if (localConfigured) saveLines.push(`💻 PC 폴더: ${localSaved}개 저장`);
-    if (saveLines.length === 0) saveLines.push('(저장된 파일 없음 — 폴더 설정 확인)');
+    else                 saveLines.push('❌ PC 로컬 폴더 핸들 없음 — 설정 탭에서 재선택 필요 (F12 콘솔 참고)');
 
     alert(`✓ 일괄 확인완료\n\n시트 기록: ${recorded}건${recordFail ? ` (실패 ${recordFail})` : ''}\n처리 프로젝트: ${projectCount}개\n${saveLines.join('\n')}`);
   },
@@ -1480,6 +1474,10 @@ const AdminView = {
    * 반환: { folderId?, category?, skip?, cancel? } 또는 null
    */
   async _promptFolderOverride(sub, pendingRow) {
+    // Drive 폴더 UI 제거됨 — 다이얼로그 띄우지 않고 자동 라우팅만.
+    return null;
+
+    // --- 이하 비활성 ---
     const cfg = Storage.getConfig();
     if (cfg.promptFolderOnConfirm === false) return null; // 자동 감지만
     // 사업구분 자동 감지 (sub + pendingRow.c = 사업구분)
@@ -1527,20 +1525,22 @@ const AdminView = {
    */
   _formatSaveSummary(driveResult, localResult) {
     const lines = [];
-    // Drive 폴더 결과
-    if (driveResult && driveResult.ok) {
-      const okCount = (driveResult.results || []).filter(x => x.ok).length;
-      const failCount = (driveResult.results || []).length - okCount;
-      lines.push(`☁️ Drive 폴더: ${okCount}개 저장${failCount > 0 ? ` (실패 ${failCount})` : ''}`);
-    } else if (driveResult === null) {
-      // Drive 미설정 — 메시지 생략
-    }
     // 로컬(PC) 폴더 결과
     if (localResult && localResult.ok) {
-      lines.push(`💻 PC 폴더: ${localResult.saved}개 저장`);
+      const cat = localResult.category ? ` (${localResult.category})` : '';
+      if (localResult.saved > 0) {
+        lines.push(`💻 PC 폴더${cat}: ${localResult.saved}개 저장 → ${localResult.folderName}`);
+      } else {
+        lines.push(`⚠ PC 폴더${cat}: 저장된 파일 없음 — 첨부파일(접수증·고지서·이체증)이 없거나 fetch 실패`);
+      }
+    } else if (localResult && !localResult.ok) {
+      const cat = localResult.category ? ` (${localResult.category})` : '';
+      lines.push(`❌ PC 폴더${cat} 핸들 없음 — 설정 탭 '💻 로컬 폴더' 에서 폴더 재선택 또는 권한 재승인 필요`);
+    } else if (localResult === null) {
+      lines.push(`❌ PC 폴더 미설정 — 설정 탭 '💻 로컬 폴더 (3분류)' 에서 해당 사업구분 폴더 선택`);
     }
     if (lines.length === 0) {
-      return '(저장된 파일 없음 — Drive 처리완료 폴더 또는 PC 로컬 폴더를 설정하세요)';
+      return '(저장된 파일 없음)';
     }
     return lines.join('\n');
   },
@@ -2010,16 +2010,7 @@ const AdminView = {
       document.getElementById('cfg-pending-name').value = cfg.pendingSheetName || '';
     }
 
-    // 처리완료 폴더 (3분류 + 레거시)
-    const envEl      = document.getElementById('cfg-processed-folder-env25');
-    const climateEl  = document.getElementById('cfg-processed-folder-climate26');
-    const privateEl  = document.getElementById('cfg-processed-folder-private');
-    if (envEl)     envEl.value     = cfg.processedFolderUrl_env25 || '';
-    if (climateEl) climateEl.value = cfg.processedFolderUrl_climate26 || '';
-    if (privateEl) privateEl.value = cfg.processedFolderUrl_private || '';
-    document.getElementById('cfg-processed-folder').value = cfg.processedFolderUrl || '';
-    const promptChk = document.getElementById('cfg-prompt-folder-on-confirm');
-    if (promptChk) promptChk.checked = cfg.promptFolderOnConfirm !== false;
+    // Drive 폴더 UI 는 제거됨 — 설정은 저장소에 유지되지만 렌더 안 함
 
     // 임시 저장 로컬 폴더 — hint + skip 토글
     const hintEl = document.getElementById('staging-folder-hint');
@@ -2150,25 +2141,8 @@ const AdminView = {
       }
     }
 
-    // 처리완료 폴더 저장 (3분류 + 레거시)
-    const saveCatFolder = (cat) => {
-      const el = document.getElementById('cfg-processed-folder-' + cat);
-      if (!el) return;
-      const raw = el.value.trim();
-      cfg['processedFolderUrl_' + cat] = raw;
-      cfg['processedFolderId_' + cat]  = this._extractFolderId(raw);
-      // 입력이 있는데 ID 추출이 실패했으면 경고
-      if (raw && !cfg['processedFolderId_' + cat]) {
-        const statusEl = document.getElementById('folder-test-status-' + cat);
-        if (statusEl) statusEl.innerHTML = '<span style="color:var(--danger)">⚠ 폴더 ID 추출 실패 — Drive URL/ID 형식인지 확인하세요.</span>';
-      }
-    };
-    ['env25','climate26','private'].forEach(saveCatFolder);
-    const folderInput = document.getElementById('cfg-processed-folder').value.trim();
-    cfg.processedFolderUrl = folderInput;
-    cfg.processedFolderId  = this._extractFolderId(folderInput);
-    const promptChk = document.getElementById('cfg-prompt-folder-on-confirm');
-    cfg.promptFolderOnConfirm = promptChk ? !!promptChk.checked : true;
+    // Drive 폴더 UI 는 제거됨 — 저장 로직 스킵
+    // (저장된 cfg 값은 유지되지만 저장도 렌더도 안 함)
 
     // 임시 저장 로컬 폴더 토글
     const stgSkipChk = document.getElementById('cfg-staging-skip-drive');
@@ -2551,13 +2525,18 @@ const AdminView = {
 
   /**
    * PC 로컬 폴더에 처리완료 파일 저장 (File System Access API)
-   * Drive 저장과 독립적으로 동작 — 둘 다 설정돼 있으면 동시 저장
+   * 사업구분별 3분류 폴더로 자동 라우팅.
    */
   async copyToLocalFolder(sub) {
     // sub 의 사업구분에 맞는 로컬 폴더 핸들 자동 선택
     const picked = await this._pickLocalFolderHandle(sub);
     const folderHandle = picked.handle;
-    if (!folderHandle) return null;
+    const catLabel = Utils.categoryLabel(picked.category);
+    if (!folderHandle) {
+      console.warn(`❌ 로컬 저장 중단: ${catLabel} 폴더 핸들 없음 (source=${picked.source}). 설정 탭에서 폴더 선택을 확인하거나 브라우저 권한을 재승인하세요.`);
+      return { ok: false, saved: 0, reason: 'no_handle', category: catLabel };
+    }
+    console.log(`💻 로컬 저장 시작: ${catLabel} 폴더 → ${folderHandle.name || '(이름 미확인)'} (source=${picked.source})`);
 
     const cfg = Storage.getConfig();
     const submissions = Storage.getSubmissions();
@@ -2651,8 +2630,9 @@ const AdminView = {
       saved++;
     }
 
-    if (saved > 0) console.log(`✓ 로컬 저장: ${saved}개 → ${folderHandle.name}/${folderName}`);
-    return { ok: true, saved, folderName };
+    if (saved > 0) console.log(`✅ 로컬 저장 완료: ${saved}개 → ${catLabel}/${folderHandle.name}/${folderName}`);
+    else           console.warn(`⚠ 로컬 저장: 저장된 파일 없음 (${catLabel}/${folderHandle.name}/${folderName})`);
+    return { ok: true, saved, folderName, category: catLabel };
   },
 
   /**

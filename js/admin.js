@@ -1179,6 +1179,9 @@ const AdminView = {
       projectCount++;
       if (btn) btn.textContent = `⏳ 폴더 저장 ${seenProjects.size}...`;
 
+      // 💡 사업구분 주입 — 모든 copy 경로가 올바른 카테고리로 라우팅되도록
+      if (row.c && !matchedSub.category) matchedSub.category = row.c;
+
       // 카테고리별 override 결정 (프롬프트 1회만)
       const guessSub = { ...matchedSub, category: row.c || matchedSub.category };
       const cat = Utils.detectCategory(guessSub);
@@ -1440,6 +1443,12 @@ const AdminView = {
     const sub = Storage.getSubmissions().find(s => s.id === id);
     let driveResult = null, localResult = null;
     if (sub) {
+      // 💡 사업구분 주입 — 납부대기 시트 C열 → sub.category.
+      //    Utils.detectCategory 가 projectName 접두사만 보면 민자로 오분류되는 문제 수정.
+      if (pendingRow && pendingRow.c && !sub.category) {
+        sub.category = pendingRow.c;
+      }
+
       // 확인 시 저장 경로 지정 다이얼로그 (silent/override 지정 시 스킵)
       let resolvedOverride = override;
       if (!silent && !override) {

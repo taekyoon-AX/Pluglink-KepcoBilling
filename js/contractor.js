@@ -468,6 +468,28 @@ const ContractorView = {
     }
     let stagingCount = 0;
 
+    // 💡 사업구분 일괄 조회 — 중앙시트 G열(기본) 또는 사용자 지정
+    //    각 item.data.category 에 주입해 staging/drive 카테고리 라우팅 정확하게
+    let categoryMap = {};
+    if (Sync.enabled() && cfg.centralProjectSheetUrl) {
+      const uniqueIds = [...new Set(toSubmit.map(t => t.data.projectId).filter(Boolean))];
+      if (uniqueIds.length > 0) {
+        try {
+          const r = await Sync.lookupCentralColumns(
+            cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
+            uniqueIds, ['G'],
+          );
+          if (r.ok && r.map) {
+            Object.keys(r.map).forEach(pid => { categoryMap[pid] = r.map[pid].G || ''; });
+          }
+        } catch (e) { console.warn('사업구분 조회 실패:', e); }
+      }
+    }
+    toSubmit.forEach(t => {
+      const cat = categoryMap[t.data.projectId];
+      if (cat) t.data.category = cat;
+    });
+
     const msgEl = document.getElementById('submit-msg');
     for (let i = 0; i < toSubmit.length; i++) {
       const item = toSubmit[i];

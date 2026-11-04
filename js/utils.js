@@ -85,15 +85,17 @@ const Utils = {
   },
 
   /**
-   * 금주 처리예정일 (현재 시점 기준, 다가오는)
+   * 금주 처리예정일 — "그 주 목요일"
+   * 오늘 기준 다가오는 processDow(기본 목요일). 오늘이 processDow면 오늘.
+   * 이미 그 주 목요일이 지났으면 다음 주 목요일.
    */
   getCurrentProcessDate(config) {
-    const deadline = this.getCurrentDeadline(config);
-    const processDate = new Date(deadline);
-    const diff = (config.processDow - deadline.getDay() + 7) % 7;
-    processDate.setDate(deadline.getDate() + (diff === 0 ? 7 : diff));
-    processDate.setHours(0, 0, 0, 0);
-    return processDate;
+    const now = new Date();
+    const d = new Date(now);
+    const diff = (config.processDow - now.getDay() + 7) % 7;
+    d.setDate(now.getDate() + diff);
+    d.setHours(0, 0, 0, 0);
+    return d;
   },
 
   /**

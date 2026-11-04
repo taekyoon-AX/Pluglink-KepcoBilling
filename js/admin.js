@@ -1529,13 +1529,16 @@ const AdminView = {
     if (localResult && localResult.ok) {
       const cat = localResult.category ? ` (${localResult.category})` : '';
       if (localResult.saved > 0) {
-        lines.push(`💻 PC 폴더${cat}: ${localResult.saved}개 저장 → ${localResult.folderName}`);
+        lines.push(`💻 PC 폴더${cat}: ${localResult.saved}개 저장`);
+        lines.push(`  → ${localResult.folderName}`);
       } else {
         lines.push(`⚠ PC 폴더${cat}: 저장된 파일 없음 — 첨부파일(접수증·고지서·이체증)이 없거나 fetch 실패`);
       }
     } else if (localResult && !localResult.ok) {
       const cat = localResult.category ? ` (${localResult.category})` : '';
-      lines.push(`❌ PC 폴더${cat} 핸들 없음 — 설정 탭 '💻 로컬 폴더' 에서 폴더 재선택 또는 권한 재승인 필요`);
+      lines.push(`❌ PC 폴더${cat} 핸들 없음`);
+      lines.push(`  → 설정 탭 '💻 로컬 폴더' 에서 폴더 재선택 또는 권한 재승인 필요`);
+      lines.push(`  → 파일은 임시폴더(설정했다면) 또는 브라우저 IndexedDB 에만 남음`);
     } else if (localResult === null) {
       lines.push(`❌ PC 폴더 미설정 — 설정 탭 '💻 로컬 폴더 (3분류)' 에서 해당 사업구분 폴더 선택`);
     }

@@ -634,6 +634,93 @@ const AdminView = {
         console.log(`📊 중앙시트 역조회: 숫자후보 ${extraLookupNums.length}개 → 유효 ${validInCentral.size}개 → 자동매칭 ${autoMatched}건`);
       }
 
+      // ── OCR fallback: pdfjs 로 못 읽은 _UNKNOWN 페이지는 tesseract 로 재시도 ──
+      // CID 폰트/텍스트 미임베딩 PDF 는 pdfjs 추출 결과가 □ 로 깨짐 → OCR 로 숫자만 뽑기
+      const stillUnknown = pageInfos.filter(p => !p.projNum);
+      if (stillUnknown.length > 0 && window.Tesseract) {
+        status.textContent = `⏳ OCR 준비 중 (${stillUnknown.length}페이지)...`;
+        console.log(`🔍 OCR fallback 시작: ${stillUnknown.length} 페이지`);
+        try {
+          const worker = await window.Tesseract.createWorker('eng', 1, {
+            logger: m => { if (m.status === 'recognizing text') status.textContent = `⏳ OCR ${m.progress ? Math.round(m.progress * 100) : 0}%`; },
+          });
+          await worker.setParameters({
+            tessedit_char_whitelist: '0123456789-,',
+            tessedit_pageseg_mode: '6',
+          });
+
+          // 계좌/ID 재매칭 준비
+          const tryRematch = (text, pi) => {
+            const rawNums = text.match(/\d{4,}/g) || [];
+            const uniqueNums = Array.from(new Set(rawNums));
+            pi.ocrNums = uniqueNums;
+            // ID 직접 매칭
+            for (const n of uniqueNums) {
+              if (candidateIds.includes(n)) { pi.projNum = n; pi.memo = `OCR_ID(${n})`; return true; }
+            }
+            // 계좌 매칭
+            const acctTokens = (text.match(/[\d\-]{8,}/g) || []).map(t => t.replace(/[^0-9]/g, '')).filter(d => d.length >= 8);
+            for (const d of acctTokens) {
+              if (accountIndex[d]) { pi.projNum = accountIndex[d]; pi.memo = `OCR_계좌(${d})`; return true; }
+            }
+            // 금액 매칭
+            const amounts = text.match(/\d{1,3}(?:,\d{3}){1,4}|\d{5,10}/g) || [];
+            for (const a of amounts) {
+              if (amountIndex[a]) { pi.projNum = amountIndex[a]; pi.memo = `OCR_금액(${a})`; return true; }
+            }
+            // 중앙시트 역조회용 숫자 후보 저장 (아래 batch lookup 에서 처리)
+            pi.numCandidates = Array.from(new Set([...(pi.numCandidates || []), ...uniqueNums]));
+            return false;
+          };
+
+          let ocrMatched = 0;
+          for (const pi of stillUnknown) {
+            status.textContent = `⏳ OCR 페이지 ${pi.page}/${pageCount}...`;
+            const page = await pdf.getPage(pi.page);
+            const viewport = page.getViewport({ scale: 2.0 });
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            const ctx = canvas.getContext('2d');
+            await page.render({ canvasContext: ctx, viewport }).promise;
+            const { data: { text } } = await worker.recognize(canvas);
+            console.log(`🔍 OCR p.${pi.page}:`, (text || '').replace(/\s+/g, ' ').slice(0, 200));
+            if (tryRematch(text, pi)) ocrMatched++;
+          }
+          await worker.terminate();
+          console.log(`🔍 OCR 결과: ${ocrMatched}/${stillUnknown.length} 매칭 성공`);
+
+          // OCR 로 뽑힌 숫자들 중 아직 매칭 안 된 것 → 중앙시트 batch lookup
+          const stillAfterOcr = pageInfos.filter(p => !p.projNum);
+          const ocrNumsAll = new Set();
+          stillAfterOcr.forEach(p => (p.numCandidates || []).forEach(n => ocrNumsAll.add(n)));
+          const alreadyLookedUp = new Set([...projNums, ...extraLookupNums]);
+          const newNums = [...ocrNumsAll].filter(n => !alreadyLookedUp.has(n));
+          if (newNums.length > 0 && Sync.enabled() && cfg.centralProjectSheetUrl) {
+            status.textContent = `⏳ OCR 숫자 중앙시트 역조회 (${newNums.length}개)...`;
+            const r2 = await Sync.lookupCentralColumns(
+              cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
+              newNums, ['G', 'H', 'I'],
+            );
+            if (r2.ok) {
+              Object.assign(centralLookup, r2.map || {});
+              const validOcr = new Set();
+              newNums.forEach(n => { if (r2.map[n] && (r2.map[n].G || r2.map[n].I)) validOcr.add(n); });
+              for (const p of stillAfterOcr) {
+                const hits = (p.numCandidates || []).filter(n => validOcr.has(n));
+                if (hits.length === 1) { p.projNum = hits[0]; p.memo = `OCR_중앙시트(${hits[0]})`; }
+                else if (hits.length > 1) { p.memo = `OCR_다수후보: ${hits.join(',')}`; }
+              }
+            }
+          }
+        } catch (ocrErr) {
+          console.warn('OCR 실패:', ocrErr);
+          status.textContent = `⚠ OCR 실패: ${ocrErr.message}`;
+        }
+      } else if (stillUnknown.length > 0 && !window.Tesseract) {
+        console.warn('⚠ Tesseract.js 미로드 — OCR fallback 불가. index.html 의 script 태그 확인.');
+      }
+
       // 상태 저장 — 수동 매칭 드롭다운에서 재렌더용
       this._splitPageInfos = pageInfos;
       this._splitSubsByProj = subsByProj;

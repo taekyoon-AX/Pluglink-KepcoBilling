@@ -361,7 +361,24 @@ const AdminView = {
       // 현장명 인덱스 구축 — projectId 가 이체증에 없는 경우(우리은행 '내부메모' 등) 역매칭용
       // 각 엔트리: { id, searchKey(공백제거 현장명), sourceLabel }
       const nameIndex = this._buildNameIndex(folderIndex, subsByProj);
-      console.log(`🔎 매칭 후보 ID: ${candidateIds.length}개, 현장명 인덱스: ${nameIndex.length}개 (폴더 ${Object.keys(folderIndex).length} + 제출 ${Object.keys(subsByProj).length})`);
+
+      // 금액 인덱스 구축 — submissions 의 baseFee / (baseFee*1.1) → projectId
+      // 각 금액에 대해 콤마포함/미포함 두 형태 모두 저장
+      const amountIndex = {};
+      for (const [pid, subs] of Object.entries(subsByProj)) {
+        const baseFee = Number(subs[0] && subs[0].baseFee) || 0;
+        if (baseFee <= 0) continue;
+        const candidates = [
+          baseFee,
+          Math.round(baseFee * 1.1), // VAT 포함 청구금액
+        ];
+        for (const amt of candidates) {
+          amountIndex[String(amt)] = pid;
+          amountIndex[amt.toLocaleString()] = pid; // "1,234,567"
+        }
+      }
+
+      console.log(`🔎 매칭 후보 ID: ${candidateIds.length}개, 현장명 인덱스: ${nameIndex.length}개, 금액 인덱스: ${Object.keys(amountIndex).length}개 (폴더 ${Object.keys(folderIndex).length} + 제출 ${Object.keys(subsByProj).length})`);
       if (candidateIds.length === 0) {
         console.warn('⚠ 후보 ID 가 없습니다. 기존 폴더/제출 데이터가 비어있거나 로컬 폴더 권한이 없을 수 있습니다.');
       }
@@ -424,18 +441,31 @@ const AdminView = {
           }
         }
 
-        // ── 매칭 2순위: 내부메모 → 현장명 역매칭 (우리은행 포맷) ──
-        // 패턴: "내부메모XXX보내는분" 또는 "내부메모XXX받는분" 또는 "내부메모XXX표준시설"
-        let memoValue = '';
+        // ── 매칭 2순위: 금액 매칭 (submissions baseFee / VAT 포함) ──
+        let matchedAmount = '';
         if (!projNum) {
+          const amounts = compact.match(/\d{1,3}(?:,\d{3}){1,4}|\d{5,10}/g) || [];
+          for (const a of amounts) {
+            if (amountIndex[a]) {
+              projNum = amountIndex[a];
+              matchedAmount = a;
+              memo = `금액매칭(${a})`;
+              break;
+            }
+          }
+        }
+
+        // ── 매칭 3순위: 내부메모 → 현장명 역매칭 (우리은행 포맷) ──
+        let memoValue = '';
+        {
           const memoM = compact.match(/내부메모(.+?)(보내는분|받는분|표준시설|$)/);
           if (memoM) memoValue = memoM[1].trim();
-          if (memoValue) {
-            const hit = this._matchByName(memoValue, nameIndex);
-            if (hit) {
-              projNum = hit.id;
-              memo = memoValue;
-            }
+        }
+        if (!projNum && memoValue) {
+          const hit = this._matchByName(memoValue, nameIndex);
+          if (hit) {
+            projNum = hit.id;
+            memo = memoValue;
           }
         }
 
@@ -463,9 +493,9 @@ const AdminView = {
         }
 
         pageInfos.push({
-          page: p, projNum, dateVal, memo, memoValue,
-          fullText: lines.join(' | ').slice(0, 300),
-          compact: compact.slice(0, 200), // _UNKNOWN 진단용
+          page: p, projNum, dateVal, memo, memoValue, matchedAmount,
+          fullText: lines.join(' | ').slice(0, 500),
+          compact: compact.slice(0, 500), // _UNKNOWN 진단용 — 금액이 포함되도록 길이 확장
         });
       }
 
@@ -498,6 +528,7 @@ const AdminView = {
       this._splitSubsByProj = subsByProj;
       this._splitCandidateIds = candidateIds;
       this._splitNameIndex = nameIndex;
+      this._splitAmountIndex = amountIndex;
       this._splitPageCount = pageCount;
       this._splitCentralLookup = centralLookup;
       status.textContent = '';
@@ -519,6 +550,7 @@ const AdminView = {
     const subsByProj = this._splitSubsByProj || {};
     const candidateIds = this._splitCandidateIds || [];
     const nameIndex = this._splitNameIndex || [];
+    const amountIndex = this._splitAmountIndex || {};
     const pageCount = this._splitPageCount || 0;
     const centralLookup = this._splitCentralLookup || {};
 
@@ -645,9 +677,9 @@ const AdminView = {
               ⚠ 프로젝트번호 미매칭 ${unknownPages.length}페이지 — 수동 매칭 가능
             </summary>
             <p style="margin:8px 0 6px 0;font-size:12px;color:#92400e">
-              우리은행 이체증의 <strong>내부메모</strong> 가 기존 폴더/제출 현장명과 자동 매칭되지 않았습니다.
-              아래 드롭다운에서 각 페이지에 해당하는 폴더/제출을 직접 선택하세요.<br>
-              후보 ID: <strong>${candidateIds.length}개</strong> · 현장명 인덱스: <strong>${nameIndex.length}개</strong>
+              자동매칭 실패(ID·금액·현장명 모두). 아래 드롭다운에서 각 페이지에 해당하는 폴더/제출을 직접 선택하세요.<br>
+              후보 ID: <strong>${candidateIds.length}</strong> · 현장명: <strong>${nameIndex.length}</strong> · 금액: <strong>${Object.keys(amountIndex).length}</strong>
+              <br><span style="font-size:11px">💡 다음부터 송금 시 내부메모에 <code>12345 한강동원</code> 처럼 프로젝트ID(5자리)를 포함하면 자동매칭됩니다.</span>
             </p>
             <div style="max-height:320px;overflow:auto;background:white;padding:6px;border-radius:4px">
               <table class="data-table compact"><tbody>${rows}</tbody></table>

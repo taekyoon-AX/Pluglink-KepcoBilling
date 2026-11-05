@@ -336,6 +336,7 @@ const AdminView = {
     result.innerHTML = '';
 
     try {
+      const cfg = Storage.getConfig();
       const ab = await file.arrayBuffer();
       this._splitPdfBytes = ab.slice(0); // pdf-lib 용 보존
 
@@ -364,14 +365,11 @@ const AdminView = {
 
       // 금액 인덱스 구축 — submissions 의 baseFee / (baseFee*1.1) → projectId
       // 중복 금액은 매칭에서 제외 (여러 프로젝트 가능 → 오매칭 방지)
-      const amountCount = {}; // key → projectId 후보 Set
+      const amountCount = {};
       for (const [pid, subs] of Object.entries(subsByProj)) {
         const baseFee = Number(subs[0] && subs[0].baseFee) || 0;
         if (baseFee <= 0) continue;
-        const candidates = [
-          baseFee,
-          Math.round(baseFee * 1.1),
-        ];
+        const candidates = [baseFee, Math.round(baseFee * 1.1)];
         for (const amt of candidates) {
           const keys = [String(amt), amt.toLocaleString()];
           for (const k of keys) {
@@ -380,7 +378,6 @@ const AdminView = {
           }
         }
       }
-      // 단일 projectId 만 가리키는 금액 키만 인덱스에 포함 (안전)
       const amountIndex = {};
       let droppedDup = 0;
       for (const [k, set] of Object.entries(amountCount)) {
@@ -388,6 +385,43 @@ const AdminView = {
         else droppedDup++;
       }
       if (droppedDup > 0) console.log(`💰 금액 인덱스: ${Object.keys(amountIndex).length}개 (중복 제외 ${droppedDup}개)`);
+
+      // 계좌 인덱스 구축 — submissions + 납부내역 시트(처리완료) 양쪽에서 수집
+      // 정규화: 숫자만 추출 (하이픈/공백 제거), 8자리 이상만 유효
+      status.textContent = '⏳ 계좌번호 인덱스 구축 중...';
+      const accountCount = {};
+      const addAccount = (pid, raw) => {
+        const digits = String(raw || '').replace(/[^0-9]/g, '');
+        if (digits.length < 8) return;
+        if (!accountCount[digits]) accountCount[digits] = new Set();
+        accountCount[digits].add(pid);
+      };
+      // ① submissions 처리예정 — sub.customerAccount
+      for (const [pid, subs] of Object.entries(subsByProj)) {
+        addAccount(pid, subs[0] && subs[0].customerAccount);
+      }
+      // ② 납부내역 시트 (처리완료) L열 — admin 전체 로드
+      let processingRowCount = 0;
+      if (Sync.enabled() && cfg.processingSheetUrl) {
+        try {
+          const pr = await Sync.readProcessingRows(cfg.processingSheetUrl, cfg.processingSheetGid, cfg.processingSheetName);
+          if (pr.ok) {
+            processingRowCount = (pr.rows || []).length;
+            for (const row of pr.rows || []) {
+              const pid = String(row.b || '').trim();
+              if (pid) addAccount(pid, row.l);
+            }
+          }
+        } catch (e) { console.warn('처리시트 lookup 실패:', e); }
+      }
+      // 단일 projectId 만 가리키는 계좌만 인덱스에 포함
+      const accountIndex = {};
+      let droppedAcctDup = 0;
+      for (const [k, set] of Object.entries(accountCount)) {
+        if (set.size === 1) accountIndex[k] = [...set][0];
+        else droppedAcctDup++;
+      }
+      console.log(`🏦 계좌 인덱스: ${Object.keys(accountIndex).length}개 (중복 제외 ${droppedAcctDup}, 납부내역 ${processingRowCount}행 포함)`);
 
       console.log(`🔎 매칭 후보 ID: ${candidateIds.length}개, 현장명 인덱스: ${nameIndex.length}개, 금액 인덱스: ${Object.keys(amountIndex).length}개 (폴더 ${Object.keys(folderIndex).length} + 제출 ${Object.keys(subsByProj).length})`);
       if (candidateIds.length === 0) {
@@ -436,7 +470,8 @@ const AdminView = {
           return s.trim();
         }).filter(Boolean);
 
-        const compact = lines.join(' ').replace(/\s+/g, '');
+        const linesText = lines.join(' ');
+        const compact = linesText.replace(/\s+/g, '');
         const compactUpper = compact.toUpperCase();
 
         // ── 매칭 1순위: 후보 ID 중 페이지 텍스트에 포함된 것 ──
@@ -452,7 +487,25 @@ const AdminView = {
           }
         }
 
-        // ── 매칭 2순위: 금액 매칭 (submissions baseFee / VAT 포함) ──
+        // ── 매칭 2순위: 고객지정계좌 매칭 (가장 안전 — 1:1 매핑) ──
+        // "신한은행" 또는 "입금계좌" 뒤 쪽의 숫자+하이픈 토큰 전체에서 정규화된 계좌 찾기
+        let matchedAccount = '';
+        if (!projNum) {
+          // 숫자/하이픈 블록 추출 — 길이 8자리 이상
+          const acctTokens = (linesText.match(/[\d\-]{8,}/g) || [])
+            .map(t => t.replace(/[^0-9]/g, ''))
+            .filter(d => d.length >= 8);
+          for (const d of acctTokens) {
+            if (accountIndex[d]) {
+              projNum = accountIndex[d];
+              matchedAccount = d;
+              memo = `계좌매칭(${d})`;
+              break;
+            }
+          }
+        }
+
+        // ── 매칭 3순위: 금액 매칭 (submissions baseFee / VAT 포함) ──
         let matchedAmount = '';
         if (!projNum) {
           const amounts = compact.match(/\d{1,3}(?:,\d{3}){1,4}|\d{5,10}/g) || [];
@@ -505,7 +558,6 @@ const AdminView = {
 
         // 숫자 후보 수집 — 공백 유지 lines 에서 4~6자리 토큰 추출
         // (아직 매칭 안 된 _UNKNOWN 페이지는 나중에 중앙시트에서 batch lookup)
-        const linesText = lines.join(' ');
         const numCandidates = Array.from(new Set((linesText.match(/\d{4,6}/g) || [])));
 
         pageInfos.push({
@@ -527,7 +579,6 @@ const AdminView = {
       // 1) 이미 추출된 projNum (매칭 성공한 것) 검증
       // 2) _UNKNOWN 페이지의 numCandidates (PDF에 나온 4~6자리 숫자) 역조회 →
       //    중앙시트에 존재하면 유효 projectID → 자동 매칭
-      const cfg = Storage.getConfig();
       const projNums = Object.keys(groups).filter(k => k !== '_UNKNOWN');
       const unknownPages = pageInfos.filter(p => !p.projNum);
       const unknownNumsSet = new Set();

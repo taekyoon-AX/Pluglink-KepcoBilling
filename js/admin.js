@@ -358,7 +358,10 @@ const AdminView = {
       ])).filter(id => id && /^[A-Za-z0-9]{3,}$/.test(id))
         .sort((a, b) => b.length - a.length);
 
-      console.log(`🔎 매칭 후보 ID: ${candidateIds.length}개 (폴더 ${Object.keys(folderIndex).length} + 제출 ${Object.keys(subsByProj).length})`);
+      // 현장명 인덱스 구축 — projectId 가 이체증에 없는 경우(우리은행 '내부메모' 등) 역매칭용
+      // 각 엔트리: { id, searchKey(공백제거 현장명), sourceLabel }
+      const nameIndex = this._buildNameIndex(folderIndex, subsByProj);
+      console.log(`🔎 매칭 후보 ID: ${candidateIds.length}개, 현장명 인덱스: ${nameIndex.length}개 (폴더 ${Object.keys(folderIndex).length} + 제출 ${Object.keys(subsByProj).length})`);
       if (candidateIds.length === 0) {
         console.warn('⚠ 후보 ID 가 없습니다. 기존 폴더/제출 데이터가 비어있거나 로컬 폴더 권한이 없을 수 있습니다.');
       }
@@ -413,7 +416,6 @@ const AdminView = {
         for (const id of candidateIds) {
           if (compactUpper.includes(id.toUpperCase())) {
             projNum = id;
-            // ID 바로 뒤의 짧은 한글 토막을 메모로
             const idx = compactUpper.indexOf(id.toUpperCase());
             const after = compact.slice(idx + id.length, idx + id.length + 30);
             const m = after.match(/[가-힣][가-힣A-Za-z0-9_\(\)\-\.]{0,30}/);
@@ -422,7 +424,22 @@ const AdminView = {
           }
         }
 
-        // ── 매칭 2순위 (fallback): 기존 regex (5자리 숫자 + 한글) ──
+        // ── 매칭 2순위: 내부메모 → 현장명 역매칭 (우리은행 포맷) ──
+        // 패턴: "내부메모XXX보내는분" 또는 "내부메모XXX받는분" 또는 "내부메모XXX표준시설"
+        let memoValue = '';
+        if (!projNum) {
+          const memoM = compact.match(/내부메모(.+?)(보내는분|받는분|표준시설|$)/);
+          if (memoM) memoValue = memoM[1].trim();
+          if (memoValue) {
+            const hit = this._matchByName(memoValue, nameIndex);
+            if (hit) {
+              projNum = hit.id;
+              memo = memoValue;
+            }
+          }
+        }
+
+        // ── 매칭 3순위 (fallback): regex 5자리 숫자 + 한글 ──
         if (!projNum) {
           const matchPatterns = [
             /(\d{4,6})\s*([가-힣][가-힣A-Za-z0-9_\s\(\)\-\.]{1,40})/,
@@ -446,7 +463,7 @@ const AdminView = {
         }
 
         pageInfos.push({
-          page: p, projNum, dateVal, memo,
+          page: p, projNum, dateVal, memo, memoValue,
           fullText: lines.join(' | ').slice(0, 300),
           compact: compact.slice(0, 200), // _UNKNOWN 진단용
         });
@@ -556,7 +573,10 @@ const AdminView = {
       if (unknownPages.length > 0) {
         const rows = unknownPages.map(p =>
           `<tr>
-            <td style="width:50px">p.${p.page}</td>
+            <td style="width:50px;vertical-align:top">p.${p.page}</td>
+            <td style="width:150px;vertical-align:top;font-size:12px">
+              ${p.memoValue ? `<strong style="color:#7c3aed">내부메모: ${(p.memoValue || '').replace(/</g,'&lt;')}</strong>` : '<span class="muted">내부메모 없음</span>'}
+            </td>
             <td style="font-family:monospace;font-size:11px;word-break:break-all">${(p.compact || '').replace(/</g,'&lt;')}</td>
           </tr>`
         ).join('');
@@ -566,8 +586,9 @@ const AdminView = {
               ⚠ 프로젝트번호 미매칭 ${unknownPages.length}페이지 — 추출 텍스트 확인
             </summary>
             <p style="margin:8px 0 6px 0;font-size:12px;color:#92400e">
-              아래는 각 페이지에서 추출된 텍스트입니다. 프로젝트번호가 보이면 해당 ID의 폴더가 설정된 로컬 폴더(26년기후부/민자사업) 에 존재하는지,
-              또는 처리예정 제출 데이터에 있는지 확인하세요. 후보 ID 수: <strong>${candidateIds.length}개</strong>
+              각 페이지의 <strong>내부메모</strong> 값(우리은행 이체증)이 기존 폴더/제출의 현장명과 매칭되어야 자동 분배됩니다.<br>
+              매칭 실패 원인: ① 내부메모가 폴더/제출의 현장명과 다름 ② 폴더가 아직 생성되지 않음 ③ 이름 글자 차이(띄어쓰기/접두사 등).<br>
+              후보 ID: <strong>${candidateIds.length}개</strong> · 현장명 인덱스: <strong>${nameIndex.length}개</strong>
             </p>
             <div style="max-height:260px;overflow:auto;background:white;padding:6px;border-radius:4px">
               <table class="data-table compact"><tbody>${rows}</tbody></table>
@@ -753,6 +774,85 @@ const AdminView = {
     if (lines.length === 0) lines.push('저장된 파일 없음');
     alert(`✓ 이체증 분배 완료\n\n${lines.join('\n')}${errors.length > 0 ? '\n\n오류 (최대 5건):\n' + errors.slice(0, 5).join('\n') : ''}`);
     this.closeSplitModal();
+  },
+
+  /**
+   * 내부메모 값을 정규화 — 공백/괄호/특수문자 제거, 사업구분 접두사 제거
+   */
+  _normalizeName(s) {
+    return String(s || '')
+      .replace(/^(25년환경부|26년기후부|26년환경부|민자)_?/, '')
+      .replace(/[\s_\-()\[\].,·]/g, '')
+      .trim();
+  },
+
+  /**
+   * 폴더명/제출 projectName 에서 매칭용 searchKey 생성
+   * 입력: "{ID}_{현장명}_{N차}[-M거점]" (폴더명) 또는 submission.projectName
+   * 출력: 공백/구분자 제거된 현장명 (차수/거점 suffix 제거)
+   */
+  _extractNameKey(raw, projectId) {
+    let rest = String(raw || '');
+    if (projectId && rest.startsWith(projectId + '_')) rest = rest.slice(projectId.length + 1);
+    // suffix 제거: "-N거점", "_N차"
+    rest = rest.replace(/-\d+거점$/, '');
+    rest = rest.replace(/_\d+차$/, '');
+    return this._normalizeName(rest);
+  },
+
+  /**
+   * folderIndex + subsByProj → [{id, searchKey, source}] 배열
+   * searchKey 는 정규화된 현장명 (공백/접두사 제거)
+   */
+  _buildNameIndex(folderIndex, subsByProj) {
+    const list = [];
+    const seen = new Set();
+    for (const [pid, info] of Object.entries(folderIndex)) {
+      const key = this._extractNameKey(info.folderName, pid);
+      if (!key || key.length < 2) continue;
+      const k = `${pid}|${key}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      list.push({ id: pid, searchKey: key, source: 'folder' });
+    }
+    for (const [pid, subs] of Object.entries(subsByProj)) {
+      const name = (subs[0] && subs[0].projectName) || '';
+      const key = this._extractNameKey(name, pid);
+      if (!key || key.length < 2) continue;
+      const k = `${pid}|${key}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      list.push({ id: pid, searchKey: key, source: 'sub' });
+    }
+    return list;
+  },
+
+  /**
+   * 내부메모 값으로 nameIndex 검색 — 양방향 포함 매칭, 가장 긴 공통 부분문자열 우승
+   * 반환: {id, searchKey, source} 또는 null
+   */
+  _matchByName(memoValue, nameIndex) {
+    const needle = this._normalizeName(memoValue);
+    if (!needle || needle.length < 2) return null;
+
+    // 1단계: searchKey 가 memo 로 시작하거나 memo 가 searchKey 로 시작 — prefix 매칭 우선
+    const prefixMatches = nameIndex.filter(e =>
+      e.searchKey.startsWith(needle) || needle.startsWith(e.searchKey)
+    );
+    if (prefixMatches.length > 0) {
+      // 가장 짧은 searchKey (needle 과 가장 유사) 우승
+      prefixMatches.sort((a, b) => Math.abs(a.searchKey.length - needle.length) - Math.abs(b.searchKey.length - needle.length));
+      return prefixMatches[0];
+    }
+
+    // 2단계: 양방향 포함 매칭 — 최소 2자 이상 겹쳐야 함
+    const containsMatches = nameIndex.filter(e =>
+      e.searchKey.includes(needle) || needle.includes(e.searchKey)
+    );
+    if (containsMatches.length === 0) return null;
+    // 길이 차이 적은 것 우승 (가장 정확한 매칭)
+    containsMatches.sort((a, b) => Math.abs(a.searchKey.length - needle.length) - Math.abs(b.searchKey.length - needle.length));
+    return containsMatches[0];
   },
 
   /**

@@ -677,9 +677,9 @@ const AdminView = {
               ⚠ 프로젝트번호 미매칭 ${unknownPages.length}페이지 — 수동 매칭 가능
             </summary>
             <p style="margin:8px 0 6px 0;font-size:12px;color:#92400e">
-              자동매칭 실패(ID·금액·현장명 모두). 아래 드롭다운에서 각 페이지에 해당하는 폴더/제출을 직접 선택하세요.<br>
-              후보 ID: <strong>${candidateIds.length}</strong> · 현장명: <strong>${nameIndex.length}</strong> · 금액: <strong>${Object.keys(amountIndex).length}</strong>
-              <br><span style="font-size:11px">💡 다음부터 송금 시 내부메모에 <code>12345 한강동원</code> 처럼 프로젝트ID(5자리)를 포함하면 자동매칭됩니다.</span>
+              금액 자동매칭 실패 — 처리예정 제출에 그 금액의 프로젝트가 없거나, 이미 처리완료되어 submissions 에서 빠진 건.
+              아래 드롭다운에서 해당 폴더/제출을 직접 선택하세요.<br>
+              금액 인덱스: <strong>${Object.keys(amountIndex).length}</strong> · 후보 ID: <strong>${candidateIds.length}</strong> · 현장명: <strong>${nameIndex.length}</strong>
             </p>
             <div style="max-height:320px;overflow:auto;background:white;padding:6px;border-radius:4px">
               <table class="data-table compact"><tbody>${rows}</tbody></table>

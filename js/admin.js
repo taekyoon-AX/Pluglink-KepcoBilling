@@ -363,20 +363,31 @@ const AdminView = {
       const nameIndex = this._buildNameIndex(folderIndex, subsByProj);
 
       // 금액 인덱스 구축 — submissions 의 baseFee / (baseFee*1.1) → projectId
-      // 각 금액에 대해 콤마포함/미포함 두 형태 모두 저장
-      const amountIndex = {};
+      // 중복 금액은 매칭에서 제외 (여러 프로젝트 가능 → 오매칭 방지)
+      const amountCount = {}; // key → projectId 후보 Set
       for (const [pid, subs] of Object.entries(subsByProj)) {
         const baseFee = Number(subs[0] && subs[0].baseFee) || 0;
         if (baseFee <= 0) continue;
         const candidates = [
           baseFee,
-          Math.round(baseFee * 1.1), // VAT 포함 청구금액
+          Math.round(baseFee * 1.1),
         ];
         for (const amt of candidates) {
-          amountIndex[String(amt)] = pid;
-          amountIndex[amt.toLocaleString()] = pid; // "1,234,567"
+          const keys = [String(amt), amt.toLocaleString()];
+          for (const k of keys) {
+            if (!amountCount[k]) amountCount[k] = new Set();
+            amountCount[k].add(pid);
+          }
         }
       }
+      // 단일 projectId 만 가리키는 금액 키만 인덱스에 포함 (안전)
+      const amountIndex = {};
+      let droppedDup = 0;
+      for (const [k, set] of Object.entries(amountCount)) {
+        if (set.size === 1) amountIndex[k] = [...set][0];
+        else droppedDup++;
+      }
+      if (droppedDup > 0) console.log(`💰 금액 인덱스: ${Object.keys(amountIndex).length}개 (중복 제외 ${droppedDup}개)`);
 
       console.log(`🔎 매칭 후보 ID: ${candidateIds.length}개, 현장명 인덱스: ${nameIndex.length}개, 금액 인덱스: ${Object.keys(amountIndex).length}개 (폴더 ${Object.keys(folderIndex).length} + 제출 ${Object.keys(subsByProj).length})`);
       if (candidateIds.length === 0) {

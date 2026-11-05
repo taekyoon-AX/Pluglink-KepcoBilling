@@ -413,7 +413,14 @@ const AdminView = {
       }
       // 납부내역 현장명도 nameIndex 에 합치기 (처리완료 건 자동매칭용)
       nameIndex.push(...paidNameIndex);
-      console.log(`📝 납부내역 시트: ${paidRows.length}행, 유효 ID ${Object.keys(paidById).length}개, 현장명 ${paidNameIndex.length}개`);
+
+      // paidById 의 숫자만 추출 보조 index — "A12345" → "12345" 매칭도 가능
+      const paidByDigits = {};
+      for (const pid in paidById) {
+        const digits = String(pid).replace(/[^0-9]/g, '');
+        if (digits.length >= 4) paidByDigits[digits] = pid;
+      }
+      console.log(`📝 납부내역 시트: ${paidRows.length}행, 유효 ID ${Object.keys(paidById).length}개, 숫자 ID ${Object.keys(paidByDigits).length}개, 현장명 ${paidNameIndex.length}개`);
 
       // 계좌 인덱스 구축 — submissions + 납부내역 양쪽
       const accountCount = {};
@@ -686,11 +693,18 @@ const AdminView = {
             for (const id of candidateIds) {
               if (variants.has(id)) { pi.projNum = id; pi.memo = `OCR_ID(${id})`; return true; }
             }
-            // 1-추가순위: 납부내역 B열 ID (candidateIds 밖)
+            // 1-추가순위: 납부내역 B열 ID (candidateIds 밖) — 원본 또는 숫자부분 매칭
             for (const v of variants) {
-              if (v.length >= 4 && paidById[v]) {
+              if (v.length < 4) continue;
+              if (paidById[v]) {
                 pi.projNum = v; pi.memo = `OCR_납부내역ID(${v})`;
                 fillFromPaid(v);
+                return true;
+              }
+              const originalPid = paidByDigits[v];
+              if (originalPid) {
+                pi.projNum = originalPid; pi.memo = `OCR_납부내역ID숫자(${v}→${originalPid})`;
+                fillFromPaid(originalPid);
                 return true;
               }
             }

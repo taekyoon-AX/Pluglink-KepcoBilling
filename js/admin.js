@@ -503,10 +503,15 @@ const AdminView = {
           if (m) { projNum = m[1]; memo = m[2]; }
         }
 
+        // 숫자 후보 수집 — 공백 유지 lines 에서 4~6자리 토큰 추출
+        // (아직 매칭 안 된 _UNKNOWN 페이지는 나중에 중앙시트에서 batch lookup)
+        const linesText = lines.join(' ');
+        const numCandidates = Array.from(new Set((linesText.match(/\d{4,6}/g) || [])));
+
         pageInfos.push({
-          page: p, projNum, dateVal, memo, memoValue, matchedAmount,
+          page: p, projNum, dateVal, memo, memoValue, matchedAmount, numCandidates,
           fullText: lines.join(' | ').slice(0, 500),
-          compact: compact.slice(0, 500), // _UNKNOWN 진단용 — 금액이 포함되도록 길이 확장
+          compact: compact.slice(0, 500), // _UNKNOWN 진단용
         });
       }
 
@@ -518,20 +523,54 @@ const AdminView = {
         groups[key].push(pi);
       });
 
-      // 중앙 시트(PM_영차영차new) 에서 검출된 프로젝트번호 정보 lookup
+      // ── 중앙 시트 lookup — 2단계 ──
+      // 1) 이미 추출된 projNum (매칭 성공한 것) 검증
+      // 2) _UNKNOWN 페이지의 numCandidates (PDF에 나온 4~6자리 숫자) 역조회 →
+      //    중앙시트에 존재하면 유효 projectID → 자동 매칭
       const cfg = Storage.getConfig();
       const projNums = Object.keys(groups).filter(k => k !== '_UNKNOWN');
+      const unknownPages = pageInfos.filter(p => !p.projNum);
+      const unknownNumsSet = new Set();
+      unknownPages.forEach(p => (p.numCandidates || []).forEach(n => unknownNumsSet.add(n)));
+
+      // 중복 제거: projNums 에 이미 있는 것 + candidateIds 에 있는 것 제외
+      const candSet = new Set(candidateIds);
+      const projNumSet = new Set(projNums);
+      const extraLookupNums = [...unknownNumsSet].filter(n => !projNumSet.has(n) && !candSet.has(n));
+      const allLookupNums = [...projNums, ...extraLookupNums];
+
       let centralLookup = {};
-      if (projNums.length > 0 && Sync.enabled() && cfg.centralProjectSheetUrl) {
-        status.textContent = `⏳ 중앙 시트 검증 (${projNums.length}개)...`;
+      if (allLookupNums.length > 0 && Sync.enabled() && cfg.centralProjectSheetUrl) {
+        status.textContent = `⏳ 중앙 시트 lookup (검증 ${projNums.length} + 역조회 ${extraLookupNums.length})...`;
         const r = await Sync.lookupCentralColumns(
           cfg.centralProjectSheetUrl,
           cfg.centralProjectSheetGid,
           cfg.centralProjectSheetName,
-          projNums,
+          allLookupNums,
           ['G', 'H', 'I'],
         );
         if (r.ok) centralLookup = r.map || {};
+      }
+
+      // _UNKNOWN 페이지 역조회 결과 반영
+      if (extraLookupNums.length > 0) {
+        const validInCentral = new Set();
+        extraLookupNums.forEach(n => {
+          if (centralLookup[n] && (centralLookup[n].G || centralLookup[n].I)) validInCentral.add(n);
+        });
+        let autoMatched = 0;
+        for (const p of unknownPages) {
+          const hits = (p.numCandidates || []).filter(n => validInCentral.has(n));
+          if (hits.length === 1) {
+            p.projNum = hits[0];
+            p.memo = `중앙시트 매칭(${hits[0]})`;
+            autoMatched++;
+          } else if (hits.length > 1) {
+            // 여러 ID 후보 — 사용자에게 보여 수동 선택
+            p.memo = `다수후보: ${hits.join(',')}`;
+          }
+        }
+        console.log(`📊 중앙시트 역조회: 숫자후보 ${extraLookupNums.length}개 → 유효 ${validInCentral.size}개 → 자동매칭 ${autoMatched}건`);
       }
 
       // 상태 저장 — 수동 매칭 드롭다운에서 재렌더용

@@ -386,9 +386,31 @@ const AdminView = {
       }
       if (droppedDup > 0) console.log(`💰 금액 인덱스: ${Object.keys(amountIndex).length}개 (중복 제외 ${droppedDup}개)`);
 
-      // 계좌 인덱스 구축 — submissions + 납부내역 시트(처리완료) 양쪽에서 수집
-      // 정규화: 숫자만 추출 (하이픈/공백 제거), 8자리 이상만 유효
-      status.textContent = '⏳ 계좌번호 인덱스 구축 중...';
+      // 납부내역 시트(TEST) 전체 로드 — 이후 계좌/ID/현장명 역매칭에 모두 활용
+      status.textContent = '⏳ 납부내역 시트 로드 중...';
+      let paidRows = [];
+      const paidById = {};        // projectId → row (E=현장명, L=계좌)
+      const paidNameIndex = [];   // [{id, searchKey, source:'paid'}] — 현장명 역매칭용
+      if (Sync.enabled() && cfg.processingSheetUrl) {
+        try {
+          const pr = await Sync.readProcessingRows(cfg.processingSheetUrl, cfg.processingSheetGid, cfg.processingSheetName);
+          if (pr.ok) {
+            paidRows = pr.rows || [];
+            for (const row of paidRows) {
+              const pid = String(row.b || '').trim();
+              if (!pid) continue;
+              if (!paidById[pid]) paidById[pid] = row;
+              const key = this._normalizeName(row.e);
+              if (key && key.length >= 2) paidNameIndex.push({ id: pid, searchKey: key, source: 'paid' });
+            }
+          }
+        } catch (e) { console.warn('납부내역 시트 lookup 실패:', e); }
+      }
+      // 납부내역 현장명도 nameIndex 에 합치기 (처리완료 건 자동매칭용)
+      nameIndex.push(...paidNameIndex);
+      console.log(`📝 납부내역 시트: ${paidRows.length}행, 유효 ID ${Object.keys(paidById).length}개, 현장명 ${paidNameIndex.length}개`);
+
+      // 계좌 인덱스 구축 — submissions + 납부내역 양쪽
       const accountCount = {};
       const addAccount = (pid, raw) => {
         const digits = String(raw || '').replace(/[^0-9]/g, '');
@@ -396,32 +418,19 @@ const AdminView = {
         if (!accountCount[digits]) accountCount[digits] = new Set();
         accountCount[digits].add(pid);
       };
-      // ① submissions 처리예정 — sub.customerAccount
       for (const [pid, subs] of Object.entries(subsByProj)) {
         addAccount(pid, subs[0] && subs[0].customerAccount);
       }
-      // ② 납부내역 시트 (처리완료) L열 — admin 전체 로드
-      let processingRowCount = 0;
-      if (Sync.enabled() && cfg.processingSheetUrl) {
-        try {
-          const pr = await Sync.readProcessingRows(cfg.processingSheetUrl, cfg.processingSheetGid, cfg.processingSheetName);
-          if (pr.ok) {
-            processingRowCount = (pr.rows || []).length;
-            for (const row of pr.rows || []) {
-              const pid = String(row.b || '').trim();
-              if (pid) addAccount(pid, row.l);
-            }
-          }
-        } catch (e) { console.warn('처리시트 lookup 실패:', e); }
+      for (const [pid, row] of Object.entries(paidById)) {
+        addAccount(pid, row.l);
       }
-      // 단일 projectId 만 가리키는 계좌만 인덱스에 포함
       const accountIndex = {};
       let droppedAcctDup = 0;
       for (const [k, set] of Object.entries(accountCount)) {
         if (set.size === 1) accountIndex[k] = [...set][0];
         else droppedAcctDup++;
       }
-      console.log(`🏦 계좌 인덱스: ${Object.keys(accountIndex).length}개 (중복 제외 ${droppedAcctDup}, 납부내역 ${processingRowCount}행 포함)`);
+      console.log(`🏦 계좌 인덱스: ${Object.keys(accountIndex).length}개 (중복 제외 ${droppedAcctDup})`);
 
       console.log(`🔎 매칭 후보 ID: ${candidateIds.length}개, 현장명 인덱스: ${nameIndex.length}개, 금액 인덱스: ${Object.keys(amountIndex).length}개 (폴더 ${Object.keys(folderIndex).length} + 제출 ${Object.keys(subsByProj).length})`);
       if (candidateIds.length === 0) {
@@ -585,53 +594,43 @@ const AdminView = {
         groups[key].push(pi);
       });
 
-      // ── 중앙 시트 lookup — 2단계 ──
-      // 1) 이미 추출된 projNum (매칭 성공한 것) 검증
-      // 2) _UNKNOWN 페이지의 numCandidates (PDF에 나온 4~6자리 숫자) 역조회 →
-      //    중앙시트에 존재하면 유효 projectID → 자동 매칭
+      // ── 납부내역 시트 검증/역조회 — 중앙시트 대체 (사용자 요청) ──
+      // 1) 매칭된 projNum 이 납부내역에 실존하는지 검증 (centralLookup 호환 포맷으로 채움)
+      // 2) _UNKNOWN 페이지의 numCandidates 중 납부내역 B열에 있는 숫자 → 유효 projectID
       const projNums = Object.keys(groups).filter(k => k !== '_UNKNOWN');
       const unknownPages = pageInfos.filter(p => !p.projNum);
       const unknownNumsSet = new Set();
       unknownPages.forEach(p => (p.numCandidates || []).forEach(n => unknownNumsSet.add(n)));
 
-      // 중복 제거: projNums 에 이미 있는 것 + candidateIds 에 있는 것 제외
       const candSet = new Set(candidateIds);
       const projNumSet = new Set(projNums);
       const extraLookupNums = [...unknownNumsSet].filter(n => !projNumSet.has(n) && !candSet.has(n));
-      const allLookupNums = [...projNums, ...extraLookupNums];
 
-      let centralLookup = {};
-      if (allLookupNums.length > 0 && Sync.enabled() && cfg.centralProjectSheetUrl) {
-        status.textContent = `⏳ 중앙 시트 lookup (검증 ${projNums.length} + 역조회 ${extraLookupNums.length})...`;
-        const r = await Sync.lookupCentralColumns(
-          cfg.centralProjectSheetUrl,
-          cfg.centralProjectSheetGid,
-          cfg.centralProjectSheetName,
-          allLookupNums,
-          ['G', 'H', 'I'],
-        );
-        if (r.ok) centralLookup = r.map || {};
-      }
+      // centralLookup: 호환 유지를 위해 변수명 유지 (UI 에서 "검증" 컬럼으로 사용)
+      // 소스는 납부내역 시트 E(현장명) / A(시공사) 로 채움
+      const centralLookup = {};
+      const fillFromPaid = (pid) => {
+        const row = paidById[pid];
+        if (row) centralLookup[pid] = { G: row.e || '', I: row.a || '', H: '' };
+      };
+      [...projNums, ...extraLookupNums].forEach(fillFromPaid);
 
-      // _UNKNOWN 페이지 역조회 결과 반영
+      // _UNKNOWN 페이지 역조회 반영
       if (extraLookupNums.length > 0) {
-        const validInCentral = new Set();
-        extraLookupNums.forEach(n => {
-          if (centralLookup[n] && (centralLookup[n].G || centralLookup[n].I)) validInCentral.add(n);
-        });
+        const validInPaid = new Set();
+        extraLookupNums.forEach(n => { if (paidById[n]) validInPaid.add(n); });
         let autoMatched = 0;
         for (const p of unknownPages) {
-          const hits = (p.numCandidates || []).filter(n => validInCentral.has(n));
+          const hits = (p.numCandidates || []).filter(n => validInPaid.has(n));
           if (hits.length === 1) {
             p.projNum = hits[0];
-            p.memo = `중앙시트 매칭(${hits[0]})`;
+            p.memo = `납부내역 매칭(${hits[0]})`;
             autoMatched++;
           } else if (hits.length > 1) {
-            // 여러 ID 후보 — 사용자에게 보여 수동 선택
             p.memo = `다수후보: ${hits.join(',')}`;
           }
         }
-        console.log(`📊 중앙시트 역조회: 숫자후보 ${extraLookupNums.length}개 → 유효 ${validInCentral.size}개 → 자동매칭 ${autoMatched}건`);
+        console.log(`📊 납부내역 역조회: 숫자후보 ${extraLookupNums.length}개 → 유효 ${validInPaid.size}개 → 자동매칭 ${autoMatched}건`);
       }
 
       // ── OCR fallback: pdfjs 로 못 읽은 _UNKNOWN 페이지는 tesseract 로 재시도 ──
@@ -690,27 +689,16 @@ const AdminView = {
           await worker.terminate();
           console.log(`🔍 OCR 결과: ${ocrMatched}/${stillUnknown.length} 매칭 성공`);
 
-          // OCR 로 뽑힌 숫자들 중 아직 매칭 안 된 것 → 중앙시트 batch lookup
+          // OCR 로 뽑힌 숫자 중 아직 매칭 안 된 것 → 납부내역 시트 로컬 역조회
           const stillAfterOcr = pageInfos.filter(p => !p.projNum);
-          const ocrNumsAll = new Set();
-          stillAfterOcr.forEach(p => (p.numCandidates || []).forEach(n => ocrNumsAll.add(n)));
-          const alreadyLookedUp = new Set([...projNums, ...extraLookupNums]);
-          const newNums = [...ocrNumsAll].filter(n => !alreadyLookedUp.has(n));
-          if (newNums.length > 0 && Sync.enabled() && cfg.centralProjectSheetUrl) {
-            status.textContent = `⏳ OCR 숫자 중앙시트 역조회 (${newNums.length}개)...`;
-            const r2 = await Sync.lookupCentralColumns(
-              cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
-              newNums, ['G', 'H', 'I'],
-            );
-            if (r2.ok) {
-              Object.assign(centralLookup, r2.map || {});
-              const validOcr = new Set();
-              newNums.forEach(n => { if (r2.map[n] && (r2.map[n].G || r2.map[n].I)) validOcr.add(n); });
-              for (const p of stillAfterOcr) {
-                const hits = (p.numCandidates || []).filter(n => validOcr.has(n));
-                if (hits.length === 1) { p.projNum = hits[0]; p.memo = `OCR_중앙시트(${hits[0]})`; }
-                else if (hits.length > 1) { p.memo = `OCR_다수후보: ${hits.join(',')}`; }
-              }
+          for (const p of stillAfterOcr) {
+            const hits = (p.numCandidates || []).filter(n => paidById[n]);
+            if (hits.length === 1) {
+              p.projNum = hits[0];
+              p.memo = `OCR_납부내역(${hits[0]})`;
+              fillFromPaid(hits[0]);
+            } else if (hits.length > 1) {
+              p.memo = `OCR_다수후보: ${hits.join(',')}`;
             }
           }
         } catch (ocrErr) {
@@ -763,7 +751,7 @@ const AdminView = {
 
     const tbl = [];
       tbl.push(`<table class="data-table compact"><thead><tr>
-        <th>프로젝트번호</th><th>페이지</th><th>날짜</th><th>거래메모(PDF)</th><th>중앙시트 검증</th><th>매칭 제출</th><th>기존 폴더</th><th>처리</th>
+        <th>프로젝트번호</th><th>페이지</th><th>날짜</th><th>거래메모(PDF)</th><th>납부내역 검증</th><th>매칭 제출</th><th>기존 폴더</th><th>처리</th>
       </tr></thead><tbody>`);
 
       Object.entries(groups).forEach(([proj, list]) => {
@@ -783,7 +771,7 @@ const AdminView = {
           verifyCell = `<span style="color:var(--success)">✓ ${centralName}</span>` +
             (centralContractor ? `<br><span class="muted">시공사: ${centralContractor}</span>` : '');
         } else {
-          verifyCell = '<span style="color:var(--danger)">중앙시트 미발견</span>';
+          verifyCell = '<span style="color:var(--danger)">납부내역 미발견</span>';
         }
 
         // 기존 폴더 매칭
@@ -809,7 +797,7 @@ const AdminView = {
         } else if (central) {
           action = '<span style="color:var(--warning)">폴더/제출 없음</span>';
         } else {
-          action = '<span style="color:var(--danger)">중앙시트 미발견</span>';
+          action = '<span style="color:var(--danger)">납부내역 미발견</span>';
         }
 
         tbl.push(`<tr>
@@ -890,7 +878,7 @@ const AdminView = {
         <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px;margin-bottom:12px">
           📄 총 <strong>${pageCount}페이지</strong>
           · 검출 프로젝트 <strong>${Object.keys(groups).length}개</strong>
-          · 중앙시트 검증 <strong>${verifiedCount}건</strong>
+          · 납부내역 검증 <strong>${verifiedCount}건</strong>
           · 기존 폴더 매칭 <strong>${folderMatchCount}건</strong>
           · 자동 분배 가능 <strong>${distributableCount}건</strong>
           <br><span class="muted" style="font-size:12px">매칭 후보 ID: ${candidateIds.length}개 (폴더 ${Object.keys(folderIndex).length} + 제출 ${Object.keys(subsByProj).length})</span>

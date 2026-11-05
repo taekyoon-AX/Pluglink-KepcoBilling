@@ -320,6 +320,8 @@ const AdminView = {
     document.getElementById('split-modal-overlay').classList.remove('active');
     this._splitGroups = null;
     this._splitPdfBytes = null;
+    this._splitFolderIndex = null;
+    this._splitCentralLookup = null;
   },
 
   async analyzeSplitPdf() {
@@ -444,11 +446,17 @@ const AdminView = {
         subsByProj[s.projectId].push(s);
       });
 
+      // 로컬 폴더(26년기후부 + 민자사업) 스캔 — 이미 뿌려진 프로젝트 폴더 인덱스 구축
+      status.textContent = '⏳ 로컬 폴더 스캔 중...';
+      const folderIndex = await this._scanExistingProjectFolders(['climate26', 'private']);
+      this._splitFolderIndex = folderIndex;
+
       // 결과 표시
       this._splitGroups = groups;
+      this._splitCentralLookup = centralLookup;
       const tbl = [];
       tbl.push(`<table class="data-table compact"><thead><tr>
-        <th>프로젝트번호</th><th>페이지</th><th>날짜</th><th>거래메모(PDF)</th><th>중앙시트 검증</th><th>매칭 제출</th><th>처리</th>
+        <th>프로젝트번호</th><th>페이지</th><th>날짜</th><th>거래메모(PDF)</th><th>중앙시트 검증</th><th>매칭 제출</th><th>기존 폴더</th><th>처리</th>
       </tr></thead><tbody>`);
 
       Object.entries(groups).forEach(([proj, list]) => {
@@ -471,14 +479,28 @@ const AdminView = {
           verifyCell = '<span style="color:var(--danger)">중앙시트 미발견</span>';
         }
 
-        // 처리 가능 여부
+        // 기존 폴더 매칭
+        const folderMatch = folderIndex[proj];
+        let folderCell;
+        if (proj === '_UNKNOWN') {
+          folderCell = '<span style="color:var(--muted)">-</span>';
+        } else if (folderMatch) {
+          folderCell = `<span style="color:var(--success)">📁 ${Utils.categoryLabel(folderMatch.category)}</span>` +
+            `<br><span class="muted" style="font-size:11px">${folderMatch.folderName}</span>`;
+        } else {
+          folderCell = '<span style="color:var(--muted)">없음</span>';
+        }
+
+        // 처리 가능 여부 (우선순위: 기존 폴더 > 제출 매칭 > 미발견)
         let action;
         if (proj === '_UNKNOWN') {
           action = '<span style="color:var(--muted)">스킵</span>';
+        } else if (folderMatch) {
+          action = `<span style="color:var(--success)">📁 기존 폴더 분배</span>`;
         } else if (matchedSubs.length > 0) {
-          action = `<span style="color:var(--success)">분배 대상 (${matchedSubs.length}건)</span>`;
+          action = `<span style="color:var(--success)">제출 매칭 (${matchedSubs.length}건)</span>`;
         } else if (central) {
-          action = '<span style="color:var(--warning)">시공사 미제출</span>';
+          action = '<span style="color:var(--warning)">폴더/제출 없음</span>';
         } else {
           action = '<span style="color:var(--danger)">중앙시트 미발견</span>';
         }
@@ -490,13 +512,17 @@ const AdminView = {
           <td title="${(list[0].fullText || '').replace(/"/g, '&quot;')}">${list[0].memo || '-'}</td>
           <td>${verifyCell}</td>
           <td>${matchInfo}</td>
+          <td>${folderCell}</td>
           <td>${action}</td>
         </tr>`);
       });
       tbl.push('</tbody></table>');
 
-      const distributable = Object.entries(groups).filter(([proj]) => proj !== '_UNKNOWN' && subsByProj[proj]);
+      const distributable = Object.entries(groups).filter(([proj]) =>
+        proj !== '_UNKNOWN' && (folderIndex[proj] || subsByProj[proj])
+      );
       const distributableCount = distributable.length;
+      const folderMatchCount = Object.keys(groups).filter(k => k !== '_UNKNOWN' && folderIndex[k]).length;
       const verifiedCount = Object.keys(groups).filter(k => k !== '_UNKNOWN' && centralLookup[k]).length;
 
       result.innerHTML = `
@@ -504,6 +530,7 @@ const AdminView = {
           📄 총 <strong>${pageCount}페이지</strong>
           · 검출 프로젝트 <strong>${Object.keys(groups).length}개</strong>
           · 중앙시트 검증 <strong>${verifiedCount}건</strong>
+          · 기존 폴더 매칭 <strong>${folderMatchCount}건</strong>
           · 자동 분배 가능 <strong>${distributableCount}건</strong>
         </div>
         ${tbl.join('')}
@@ -532,19 +559,18 @@ const AdminView = {
     const statusEl = document.getElementById('split-status');
     const groups = this._splitGroups;
     const pdfBytes = this._splitPdfBytes;
+    const folderIndex = this._splitFolderIndex || {};
+    const centralLookup = this._splitCentralLookup || {};
     if (!groups || !pdfBytes) return;
 
     const cfg = Storage.getConfig();
-    // 카테고리별 폴더 또는 레거시 단일 폴더 중 하나라도 설정되어 있으면 Drive 저장 활성화
-    const anyCategoryFolder = !!(cfg.processedFolderId_env25 || cfg.processedFolderId_climate26 || cfg.processedFolderId_private);
-    const driveConfigured = !!(Sync.enabled() && (anyCategoryFolder || cfg.processedFolderId));
 
     // 로컬 폴더: 3분류 중 하나라도 설정됐거나 레거시 공통 폴더가 있으면 활성화
     const localNames = await LocalFolderDB.getAllNames().catch(() => ({}));
     const localConfigured = !!(localNames.env25 || localNames.climate26 || localNames.private || localNames.legacy);
 
-    if (!driveConfigured && !localConfigured) {
-      alert('처리완료 폴더가 설정되지 않았습니다.\nDrive 폴더 또는 PC 로컬 폴더를 설정해주세요.');
+    if (!localConfigured) {
+      alert('로컬 폴더가 설정되지 않았습니다.\n설정 탭 → 💻 로컬 폴더(3분류)에서 폴더를 선택하세요.');
       return;
     }
 
@@ -555,16 +581,23 @@ const AdminView = {
       subsByProj[s.projectId].push(s);
     });
 
-    const distributable = Object.entries(groups).filter(([proj]) => proj !== '_UNKNOWN' && subsByProj[proj]);
+    // 분배 가능: 기존 폴더 OR 제출 매칭
+    const distributable = Object.entries(groups).filter(([proj]) =>
+      proj !== '_UNKNOWN' && (folderIndex[proj] || subsByProj[proj])
+    );
     if (distributable.length === 0) {
-      alert('분배할 프로젝트가 없습니다.');
+      alert('분배할 프로젝트가 없습니다.\n(기존 폴더 매칭 0건 + 제출 매칭 0건)');
       return;
     }
 
-    const targets = [];
-    if (driveConfigured) targets.push('☁️ Drive');
-    if (localConfigured) targets.push('💻 PC 로컬');
-    if (!confirm(`${distributable.length}개 프로젝트 폴더(${targets.join(' + ')})에 이체증 파일을 분배합니다.\n상태는 변경되지 않습니다. 계속하시겠습니까?`)) return;
+    const folderMatchCount = distributable.filter(([p]) => folderIndex[p]).length;
+    const subMatchCount = distributable.length - folderMatchCount;
+    if (!confirm(
+      `총 ${distributable.length}건 분배:\n` +
+      `  📁 기존 폴더: ${folderMatchCount}건\n` +
+      `  📤 제출 매칭: ${subMatchCount}건\n\n` +
+      `상태는 변경되지 않습니다. 계속하시겠습니까?`
+    )) return;
 
     const { PDFDocument } = window.PDFLib;
     const srcDoc = await PDFDocument.load(pdfBytes);
@@ -591,88 +624,134 @@ const AdminView = {
     }
 
     statusEl.textContent = '⏳ 분배 중...';
-    let driveOk = 0, driveFail = 0, localOk = 0, localFail = 0;
+    let folderOk = 0, folderFail = 0, subOk = 0, subFail = 0;
     const errors = [];
 
     for (const [proj, pages] of Object.entries(groups)) {
       if (proj === '_UNKNOWN') continue;
-      const targetSubs = subsByProj[proj];
-      if (!targetSubs || targetSubs.length === 0) continue;
 
+      // 해당 프로젝트 페이지들 추출
       let newPdfBytes;
-      let folderName, fileName;
       try {
-        // 해당 프로젝트 페이지들 추출
         const newDoc = await PDFDocument.create();
         const pageIdxs = pages.map(p => p.page - 1);
         const copied = await newDoc.copyPages(srcDoc, pageIdxs);
         copied.forEach(p => newDoc.addPage(p));
         newPdfBytes = await newDoc.save();
-
-        // 폴더명 / 파일명 결정
-        const groupSize = targetSubs.length;
-        const rep = { ...targetSubs[0] };
-        rep.location = groupSize > 1 ? `${groupSize}거점` : '';
-        folderName = Utils.getProjectIdent(rep);
-        // Utils.getFileName 사용: [ID]_[현장명]_[N차][-M거점]_이체증-한전불입금(대기번호)_YYYY-MM-DD.pdf
-        fileName = Utils.getFileName(rep, 'transferReceipt', 'transfer.pdf', { waitingNumber: waitingMap[proj] || '' });
       } catch (e) {
         errors.push(`${proj} (PDF 추출): ${e.message}`);
         console.error('Split PDF extract error', proj, e);
         continue;
       }
 
-      // ── Drive 저장 (sub 카테고리별 폴더 라우팅) ──
-      if (driveConfigured) {
+      const folderMatch = folderIndex[proj];
+      const targetSubs = subsByProj[proj];
+
+      // 우선순위 1: 기존 폴더 (이미 뿌려진 프로젝트)
+      if (folderMatch) {
         try {
-          const rep0 = targetSubs[0];
-          const picked = this._pickProcessedFolderId(rep0);
-          if (!picked.id) throw new Error(`${Utils.categoryLabel(picked.category)} 폴더 미설정`);
-          const r = await Sync.copyToProcessedFolder(picked.id, folderName, [{
-            base64: this._arrayBufferToBase64(newPdfBytes),
-            mimeType: 'application/pdf',
-            name: fileName,
-          }]);
-          const okFile = r.ok && r.results && r.results[0] && r.results[0].ok;
-          if (okFile) driveOk++;
-          else {
-            driveFail++;
-            const errMsg = r.error || (r.results && r.results[0] && r.results[0].error) || 'unknown';
-            errors.push(`Drive[${proj}]: ${errMsg}`);
-          }
+          const rep = this._buildRepFromFolder(proj, folderMatch.folderName, centralLookup[proj]);
+          const fileName = Utils.getFileName(rep, 'transferReceipt', 'transfer.pdf', { waitingNumber: waitingMap[proj] || '' });
+          const projHandle = await folderMatch.parent.getDirectoryHandle(folderMatch.folderName, { create: false });
+          const fh = await projHandle.getFileHandle(fileName, { create: true });
+          const writable = await fh.createWritable();
+          await writable.write(newPdfBytes);
+          await writable.close();
+          folderOk++;
+          console.log(`✅ 이체증 → ${Utils.categoryLabel(folderMatch.category)}/${folderMatch.folderName}/${fileName}`);
         } catch (e) {
-          driveFail++;
-          errors.push(`Drive[${proj}]: ${e.message}`);
+          folderFail++;
+          errors.push(`폴더[${proj}]: ${e.message}`);
+          console.warn('기존 폴더 쓰기 실패', proj, e);
         }
+        continue;
       }
 
-      // ── PC 로컬 저장 (sub 카테고리별 폴더 라우팅) ──
-      if (localConfigured) {
+      // 우선순위 2: 제출 매칭 (처리예정 상태 — 폴더 신규 생성)
+      if (targetSubs && targetSubs.length > 0) {
         try {
-          const rep0 = targetSubs[0];
-          const pickedLocal = await this._pickLocalFolderHandle(rep0);
+          const groupSize = targetSubs.length;
+          const rep = { ...targetSubs[0] };
+          rep.location = groupSize > 1 ? `${groupSize}거점` : '';
+          const folderName = Utils.getProjectIdent(rep);
+          const fileName = Utils.getFileName(rep, 'transferReceipt', 'transfer.pdf', { waitingNumber: waitingMap[proj] || '' });
+
+          const pickedLocal = await this._pickLocalFolderHandle(rep);
           if (!pickedLocal.handle) throw new Error(`${Utils.categoryLabel(pickedLocal.category)} 로컬 폴더 미설정`);
           const projHandle = await pickedLocal.handle.getDirectoryHandle(folderName, { create: true });
           const fh = await projHandle.getFileHandle(fileName, { create: true });
           const writable = await fh.createWritable();
           await writable.write(newPdfBytes);
           await writable.close();
-          localOk++;
+          subOk++;
+          console.log(`✅ 이체증 → ${Utils.categoryLabel(pickedLocal.category)}/${folderName}/${fileName}`);
         } catch (e) {
-          localFail++;
-          errors.push(`Local[${proj}]: ${e.message}`);
-          console.warn('Split local write error', proj, e);
+          subFail++;
+          errors.push(`제출[${proj}]: ${e.message}`);
+          console.warn('제출 매칭 쓰기 실패', proj, e);
         }
       }
     }
 
     statusEl.textContent = '';
     const lines = [];
-    if (driveConfigured) lines.push(`☁️ Drive: ${driveOk}개 저장${driveFail ? ` (실패 ${driveFail})` : ''}`);
-    if (localConfigured) lines.push(`💻 PC 로컬: ${localOk}개 저장${localFail ? ` (실패 ${localFail})` : ''}`);
+    if (folderOk + folderFail > 0) lines.push(`📁 기존 폴더: ${folderOk}개 저장${folderFail ? ` (실패 ${folderFail})` : ''}`);
+    if (subOk + subFail > 0) lines.push(`📤 제출 매칭: ${subOk}개 저장${subFail ? ` (실패 ${subFail})` : ''}`);
+    if (lines.length === 0) lines.push('저장된 파일 없음');
     alert(`✓ 이체증 분배 완료\n\n${lines.join('\n')}${errors.length > 0 ? '\n\n오류 (최대 5건):\n' + errors.slice(0, 5).join('\n') : ''}`);
     this.closeSplitModal();
-    // 상태 미변경이므로 대시보드 재렌더 불필요 (선택적)
+  },
+
+  /**
+   * 로컬 폴더(지정된 카테고리) 하위의 프로젝트 폴더를 스캔하여 projectId → {handle, folderName, category} 인덱스 생성
+   * 폴더명은 "{projectId}_..." 패턴. 첫 매칭 승.
+   */
+  async _scanExistingProjectFolders(categories) {
+    const index = {};
+    for (const cat of categories) {
+      const handle = await this.getLocalFolderHandle(cat).catch(() => null);
+      if (!handle) {
+        console.log(`📂 ${Utils.categoryLabel(cat)} 로컬 폴더 핸들 없음 — 스킵`);
+        continue;
+      }
+      try {
+        let count = 0;
+        for await (const [name, h] of handle.entries()) {
+          if (h.kind !== 'directory') continue;
+          const m = name.match(/^([^_]+)_/);
+          if (!m) continue;
+          const pid = m[1];
+          if (!index[pid]) {
+            index[pid] = { parent: handle, folderName: name, category: cat };
+            count++;
+          }
+        }
+        console.log(`📂 ${Utils.categoryLabel(cat)} 스캔: ${count}개 프로젝트 폴더 발견`);
+      } catch (e) {
+        console.warn(`📂 ${Utils.categoryLabel(cat)} 스캔 실패:`, e);
+      }
+    }
+    return index;
+  },
+
+  /**
+   * 기존 폴더명에서 파일명 생성용 rep 구성
+   * 폴더명 형식: "{projectId}_{현장명}_{N차}[-M거점]"
+   * 중앙시트 lookup 데이터가 있으면 projectName 보강.
+   */
+  _buildRepFromFolder(projectId, folderName, central) {
+    let rest = folderName;
+    if (rest.startsWith(projectId + '_')) rest = rest.slice(projectId.length + 1);
+
+    // 거점 suffix 분리
+    let location = '';
+    const locMatch = rest.match(/-(\d+거점)$/);
+    if (locMatch) { location = locMatch[1]; rest = rest.slice(0, rest.length - locMatch[0].length); }
+
+    // rest 는 이제 "{현장명}_{N차}" 형태. 중앙시트 G 값이 있으면 그걸 projectName 으로.
+    let projectName = (central && central.G) ? String(central.G).trim() : rest;
+
+    return { projectId, projectName, location };
   },
 
   // ============ Q열 상태 관리 ============

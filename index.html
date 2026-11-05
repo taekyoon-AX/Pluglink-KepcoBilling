@@ -706,8 +706,9 @@
       </div>
       <div class="modal-body">
         <p class="muted" style="margin-bottom:12px">
-          여러 페이지가 합쳐진 통합 이체증 PDF를 업로드하면, 페이지별 텍스트에서 프로젝트번호를 자동 추출해
-          매칭되는 제출 건에 이체증으로 분배합니다. (같은 프로젝트의 여러 페이지는 자동 병합)
+          신한/우리 벌크 이체증 PDF를 업로드하면 페이지별 텍스트에서 프로젝트번호를 자동 추출합니다.
+          매칭 우선순위: <strong>📁 기존 로컬 폴더 (26년기후부·민자사업)</strong> → 📤 처리예정 제출 매칭.
+          같은 프로젝트의 여러 페이지는 자동 병합 후 <code>{ID}_{현장명}_{N차}[-M거점]_이체증-한전불입금({대기번호})_{YYYY-MM-DD}.pdf</code> 로 저장됩니다.
         </p>
         <div style="display:flex; gap:8px; align-items:center; margin-bottom:12px">
           <input type="file" id="split-pdf-input" accept="application/pdf" />

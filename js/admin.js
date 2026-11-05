@@ -493,10 +493,45 @@ const AdminView = {
         if (r.ok) centralLookup = r.map || {};
       }
 
-      // 결과 표시
-      this._splitGroups = groups;
+      // 상태 저장 — 수동 매칭 드롭다운에서 재렌더용
+      this._splitPageInfos = pageInfos;
+      this._splitSubsByProj = subsByProj;
+      this._splitCandidateIds = candidateIds;
+      this._splitNameIndex = nameIndex;
+      this._splitPageCount = pageCount;
       this._splitCentralLookup = centralLookup;
-      const tbl = [];
+      status.textContent = '';
+      this._renderSplitResult();
+    } catch (e) {
+      status.innerHTML = `<span style="color:var(--danger)">분석 실패: ${e.message}</span>`;
+      console.error(e);
+    }
+  },
+
+  /**
+   * 분석 결과 테이블 + _UNKNOWN 수동 매칭 UI 렌더
+   * 드롭다운 change 시 재호출됨
+   */
+  _renderSplitResult() {
+    const result = document.getElementById('split-result');
+    const pageInfos = this._splitPageInfos || [];
+    const folderIndex = this._splitFolderIndex || {};
+    const subsByProj = this._splitSubsByProj || {};
+    const candidateIds = this._splitCandidateIds || [];
+    const nameIndex = this._splitNameIndex || [];
+    const pageCount = this._splitPageCount || 0;
+    const centralLookup = this._splitCentralLookup || {};
+
+    // 현재 pageInfos 로부터 그룹 재구성
+    const groups = {};
+    pageInfos.forEach(pi => {
+      const key = pi.projNum || '_UNKNOWN';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(pi);
+    });
+    this._splitGroups = groups;
+
+    const tbl = [];
       tbl.push(`<table class="data-table compact"><thead><tr>
         <th>프로젝트번호</th><th>페이지</th><th>날짜</th><th>거래메모(PDF)</th><th>중앙시트 검증</th><th>매칭 제출</th><th>기존 폴더</th><th>처리</th>
       </tr></thead><tbody>`);
@@ -567,30 +602,54 @@ const AdminView = {
       const folderMatchCount = Object.keys(groups).filter(k => k !== '_UNKNOWN' && folderIndex[k]).length;
       const verifiedCount = Object.keys(groups).filter(k => k !== '_UNKNOWN' && centralLookup[k]).length;
 
-      // _UNKNOWN 진단 섹션: 왜 못 찾았는지 사용자가 직접 확인
+      // _UNKNOWN 진단 섹션: 수동 매칭 드롭다운 제공
       const unknownPages = groups._UNKNOWN || [];
       let diagnosticHtml = '';
       if (unknownPages.length > 0) {
-        const rows = unknownPages.map(p =>
-          `<tr>
+        // 드롭다운 옵션 — 폴더/제출 nameIndex 전체 (폴더 우선 표시)
+        const folderOpts = nameIndex.filter(e => e.source === 'folder')
+          .sort((a, b) => a.searchKey.localeCompare(b.searchKey))
+          .map(e => {
+            const info = folderIndex[e.id];
+            const catLabel = info ? Utils.categoryLabel(info.category) : '';
+            const label = info ? `${info.folderName} [${catLabel}]` : e.id;
+            return `<option value="${e.id}">📁 ${label}</option>`;
+          }).join('');
+        const subOpts = nameIndex.filter(e => e.source === 'sub')
+          .sort((a, b) => a.searchKey.localeCompare(b.searchKey))
+          .map(e => {
+            const sub = (subsByProj[e.id] || [])[0];
+            const label = sub ? `${sub.projectId} ${sub.projectName || ''}` : e.id;
+            return `<option value="${e.id}">📤 ${label}</option>`;
+          }).join('');
+
+        const rows = unknownPages.map(p => {
+          return `<tr data-page="${p.page}">
             <td style="width:50px;vertical-align:top">p.${p.page}</td>
-            <td style="width:150px;vertical-align:top;font-size:12px">
-              ${p.memoValue ? `<strong style="color:#7c3aed">내부메모: ${(p.memoValue || '').replace(/</g,'&lt;')}</strong>` : '<span class="muted">내부메모 없음</span>'}
+            <td style="width:140px;vertical-align:top;font-size:12px">
+              ${p.memoValue ? `<strong style="color:#7c3aed">${(p.memoValue || '').replace(/</g,'&lt;')}</strong>` : '<span class="muted">내부메모 없음</span>'}
             </td>
-            <td style="font-family:monospace;font-size:11px;word-break:break-all">${(p.compact || '').replace(/</g,'&lt;')}</td>
-          </tr>`
-        ).join('');
+            <td style="width:280px;vertical-align:top">
+              <select class="split-manual-select" data-page="${p.page}" style="width:100%;font-size:12px;padding:4px">
+                <option value="">— 수동 매칭 선택 —</option>
+                ${folderOpts ? `<optgroup label="📁 기존 로컬 폴더">${folderOpts}</optgroup>` : ''}
+                ${subOpts ? `<optgroup label="📤 처리예정 제출">${subOpts}</optgroup>` : ''}
+              </select>
+            </td>
+            <td style="font-family:monospace;font-size:10px;word-break:break-all;color:#555">${(p.compact || '').replace(/</g,'&lt;').slice(0, 120)}...</td>
+          </tr>`;
+        }).join('');
         diagnosticHtml = `
-          <details style="margin-top:10px;background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;padding:10px">
+          <details open style="margin-top:10px;background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;padding:10px">
             <summary style="cursor:pointer;font-weight:600;color:#92400e">
-              ⚠ 프로젝트번호 미매칭 ${unknownPages.length}페이지 — 추출 텍스트 확인
+              ⚠ 프로젝트번호 미매칭 ${unknownPages.length}페이지 — 수동 매칭 가능
             </summary>
             <p style="margin:8px 0 6px 0;font-size:12px;color:#92400e">
-              각 페이지의 <strong>내부메모</strong> 값(우리은행 이체증)이 기존 폴더/제출의 현장명과 매칭되어야 자동 분배됩니다.<br>
-              매칭 실패 원인: ① 내부메모가 폴더/제출의 현장명과 다름 ② 폴더가 아직 생성되지 않음 ③ 이름 글자 차이(띄어쓰기/접두사 등).<br>
+              우리은행 이체증의 <strong>내부메모</strong> 가 기존 폴더/제출 현장명과 자동 매칭되지 않았습니다.
+              아래 드롭다운에서 각 페이지에 해당하는 폴더/제출을 직접 선택하세요.<br>
               후보 ID: <strong>${candidateIds.length}개</strong> · 현장명 인덱스: <strong>${nameIndex.length}개</strong>
             </p>
-            <div style="max-height:260px;overflow:auto;background:white;padding:6px;border-radius:4px">
+            <div style="max-height:320px;overflow:auto;background:white;padding:6px;border-radius:4px">
               <table class="data-table compact"><tbody>${rows}</tbody></table>
             </div>
           </details>
@@ -615,14 +674,20 @@ const AdminView = {
           <button id="btn-split-cancel">취소</button>
         </div>
       `;
-      status.textContent = '';
+
+      // 드롭다운 change — pageInfo.projNum 수정 후 재렌더
+      result.querySelectorAll('.split-manual-select').forEach(sel => {
+        sel.onchange = (e) => {
+          const page = Number(e.target.dataset.page);
+          const pi = pageInfos.find(x => x.page === page);
+          if (!pi) return;
+          pi.projNum = e.target.value || '';
+          this._renderSplitResult();
+        };
+      });
 
       document.getElementById('btn-split-confirm').onclick = () => this.confirmSplitDistribute();
       document.getElementById('btn-split-cancel').onclick = () => this.closeSplitModal();
-    } catch (e) {
-      status.innerHTML = `<span style="color:var(--danger)">분석 실패: ${e.message}</span>`;
-      console.error(e);
-    }
   },
 
   /**

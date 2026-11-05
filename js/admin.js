@@ -332,6 +332,11 @@ const AdminView = {
     if (!file) { alert('PDF 파일을 선택하세요.'); return; }
     if (!window.pdfjsLib) { alert('PDF.js 로드 실패. 새로고침 후 재시도하세요.'); return; }
 
+    // 중복 실행 방지 — 버튼 바인딩/섹션 재초기화로 두 번 호출되는 케이스 차단
+    if (this._splitAnalyzing) { console.warn('⚠ 이미 분석 중 — 중복 호출 무시'); return; }
+    this._splitAnalyzing = true;
+    const _release = () => { this._splitAnalyzing = false; };
+
     status.textContent = '⏳ 준비 중 (폴더 스캔)...';
     result.innerHTML = '';
 
@@ -643,40 +648,68 @@ const AdminView = {
 
       // ── OCR fallback: pdfjs 로 못 읽은 _UNKNOWN 페이지는 tesseract 로 재시도 ──
       // CID 폰트/텍스트 미임베딩 PDF 는 pdfjs 추출 결과가 □ 로 깨짐 → OCR 로 숫자만 뽑기
+      // 정확도 최대화: scale 3.0 + psm 6(block) & psm 11(sparse) 두 모드 결과 합치기
       const stillUnknown = pageInfos.filter(p => !p.projNum);
       if (stillUnknown.length > 0 && window.Tesseract) {
         status.textContent = `⏳ OCR 준비 중 (${stillUnknown.length}페이지)...`;
-        console.log(`🔍 OCR fallback 시작: ${stillUnknown.length} 페이지`);
+        console.log(`🔍 OCR fallback 시작: ${stillUnknown.length} 페이지 (scale 3.0, psm 6+11)`);
         try {
           const worker = await window.Tesseract.createWorker('eng', 1, {
             logger: m => { if (m.status === 'recognizing text') status.textContent = `⏳ OCR ${m.progress ? Math.round(m.progress * 100) : 0}%`; },
           });
-          await worker.setParameters({
-            tessedit_char_whitelist: '0123456789-,',
-            tessedit_pageseg_mode: '6',
-          });
 
-          // 계좌/ID 재매칭 준비
+          // 공백/구두점 변형 허용 매칭 — OCR 가 "12345" 를 "1 23 45" 로 쪼갤 때 대비
+          // 모든 숫자 토큰을 공백 제거 후 연속 n자리 substring 으로 전개
+          const expandNumVariants = (text) => {
+            // 공백 제거 전체 숫자열
+            const compactDigits = text.replace(/[^0-9]/g, '');
+            const variants = new Set();
+            // 원본 숫자 토큰
+            (text.match(/\d+/g) || []).forEach(n => variants.add(n));
+            // 하이픈 포함 토큰 (계좌 등)
+            (text.match(/[\d\-]{8,}/g) || []).forEach(t => {
+              variants.add(t.replace(/[^0-9]/g, ''));
+            });
+            // 공백 제거된 전체에서 4~6자리 sliding window (projectID 후보)
+            for (let L = 4; L <= 6; L++) {
+              for (let i = 0; i + L <= compactDigits.length; i++) {
+                variants.add(compactDigits.slice(i, i + L));
+              }
+            }
+            return variants;
+          };
+
           const tryRematch = (text, pi) => {
-            const rawNums = text.match(/\d{4,}/g) || [];
-            const uniqueNums = Array.from(new Set(rawNums));
-            pi.ocrNums = uniqueNums;
-            // ID 직접 매칭
-            for (const n of uniqueNums) {
-              if (candidateIds.includes(n)) { pi.projNum = n; pi.memo = `OCR_ID(${n})`; return true; }
+            const variants = expandNumVariants(text);
+            pi.ocrNums = [...variants].slice(0, 50);
+            // 1순위: ID 직접 매칭
+            for (const id of candidateIds) {
+              if (variants.has(id)) { pi.projNum = id; pi.memo = `OCR_ID(${id})`; return true; }
             }
-            // 계좌 매칭
-            const acctTokens = (text.match(/[\d\-]{8,}/g) || []).map(t => t.replace(/[^0-9]/g, '')).filter(d => d.length >= 8);
-            for (const d of acctTokens) {
-              if (accountIndex[d]) { pi.projNum = accountIndex[d]; pi.memo = `OCR_계좌(${d})`; return true; }
+            // 1-추가순위: 납부내역 B열 ID (candidateIds 밖)
+            for (const v of variants) {
+              if (v.length >= 4 && paidById[v]) {
+                pi.projNum = v; pi.memo = `OCR_납부내역ID(${v})`;
+                fillFromPaid(v);
+                return true;
+              }
             }
-            // 금액 매칭
-            const amounts = text.match(/\d{1,3}(?:,\d{3}){1,4}|\d{5,10}/g) || [];
-            for (const a of amounts) {
-              if (amountIndex[a]) { pi.projNum = amountIndex[a]; pi.memo = `OCR_금액(${a})`; return true; }
+            // 2순위: 계좌 매칭 (8자리 이상)
+            for (const v of variants) {
+              if (v.length >= 8 && accountIndex[v]) {
+                pi.projNum = accountIndex[v]; pi.memo = `OCR_계좌(${v})`;
+                return true;
+              }
             }
-            // 중앙시트 역조회용 숫자 후보 저장 (아래 batch lookup 에서 처리)
-            pi.numCandidates = Array.from(new Set([...(pi.numCandidates || []), ...uniqueNums]));
+            // 3순위: 금액 매칭
+            for (const v of variants) {
+              if (amountIndex[v]) { pi.projNum = amountIndex[v]; pi.memo = `OCR_금액(${v})`; return true; }
+            }
+            // numCandidates 축적 (4~6자리만 — 위 역조회 반영 안 되는 fallback 용)
+            pi.numCandidates = Array.from(new Set([
+              ...(pi.numCandidates || []),
+              ...[...variants].filter(v => v.length >= 4 && v.length <= 6),
+            ]));
             return false;
           };
 
@@ -684,15 +717,31 @@ const AdminView = {
           for (const pi of stillUnknown) {
             status.textContent = `⏳ OCR 페이지 ${pi.page}/${pageCount}...`;
             const page = await pdf.getPage(pi.page);
-            const viewport = page.getViewport({ scale: 2.0 });
+            const viewport = page.getViewport({ scale: 3.0 });
             const canvas = document.createElement('canvas');
             canvas.width = viewport.width;
             canvas.height = viewport.height;
             const ctx = canvas.getContext('2d');
             await page.render({ canvasContext: ctx, viewport }).promise;
-            const { data: { text } } = await worker.recognize(canvas);
-            console.log(`🔍 OCR p.${pi.page}:`, (text || '').replace(/\s+/g, ' ').slice(0, 200));
-            if (tryRematch(text, pi)) ocrMatched++;
+
+            // psm 6 (uniform block) 로 1차 시도
+            await worker.setParameters({
+              tessedit_char_whitelist: '0123456789-,',
+              tessedit_pageseg_mode: '6',
+            });
+            const r1 = await worker.recognize(canvas);
+            const t1 = r1.data.text || '';
+
+            // psm 11 (sparse text) 로 2차 시도 → 결과 합치기
+            await worker.setParameters({
+              tessedit_pageseg_mode: '11',
+            });
+            const r2 = await worker.recognize(canvas);
+            const t2 = r2.data.text || '';
+
+            const combined = t1 + '\n' + t2;
+            console.log(`🔍 OCR p.${pi.page} (psm6+11):`, combined.replace(/\s+/g, ' ').slice(0, 300));
+            if (tryRematch(combined, pi)) ocrMatched++;
           }
           await worker.terminate();
           console.log(`🔍 OCR 결과: ${ocrMatched}/${stillUnknown.length} 매칭 성공`);
@@ -730,6 +779,8 @@ const AdminView = {
     } catch (e) {
       status.innerHTML = `<span style="color:var(--danger)">분석 실패: ${e.message}</span>`;
       console.error(e);
+    } finally {
+      _release();
     }
   },
 

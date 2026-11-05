@@ -430,13 +430,16 @@ const AdminView = {
 
       // ── 2단계: PDF 분석 ──
       // cMapUrl: CID 폰트(한글/한자/숫자)의 유니코드 매핑 테이블.
-      // 설정 없으면 추출 결과가 □ (tofu) 로 깨짐 — 우리은행 이체증이 이 포맷.
-      status.textContent = '⏳ PDF 분석 중...';
+      // cdnjs 는 cmap 디렉토리 호스팅 안 함 → jsdelivr 사용 (npm 패키지 전체 호스팅).
+      // 설정 없으면 우리은행 이체증 같은 CID 폰트 PDF 추출 결과가 □ 로 깨짐.
+      status.textContent = '⏳ PDF 분석 중 (CMap 로드)...';
+      console.log('🔧 pdfjs cMapUrl: https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/');
       const loadingTask = pdfjsLib.getDocument({
         data: ab.slice(0),
-        cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+        cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
         cMapPacked: true,
         useSystemFonts: true,
+        standardFontDataUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/',
       });
       const pdf = await loadingTask.promise;
       const pageCount = pdf.numPages;

@@ -332,14 +332,39 @@ const AdminView = {
     if (!file) { alert('PDF 파일을 선택하세요.'); return; }
     if (!window.pdfjsLib) { alert('PDF.js 로드 실패. 새로고침 후 재시도하세요.'); return; }
 
-    status.textContent = '⏳ PDF 분석 중...';
+    status.textContent = '⏳ 준비 중 (폴더 스캔)...';
     result.innerHTML = '';
 
     try {
       const ab = await file.arrayBuffer();
       this._splitPdfBytes = ab.slice(0); // pdf-lib 용 보존
 
-      // PDF.js 로 페이지별 텍스트 추출
+      // ── 1단계: 후보 프로젝트 ID 수집 (기존 폴더 + 처리예정 제출) ──
+      // 이 ID 집합을 PDF 텍스트에서 역검색하는 방식이 regex 추출보다 안정적.
+      const folderIndex = await this._scanExistingProjectFolders(['climate26', 'private']);
+      this._splitFolderIndex = folderIndex;
+
+      const submissions = Storage.getSubmissions();
+      const subsByProj = {};
+      submissions.forEach(s => {
+        if (!subsByProj[s.projectId]) subsByProj[s.projectId] = [];
+        subsByProj[s.projectId].push(s);
+      });
+
+      // 후보 ID 집합: 길이 내림차순 정렬 (긴 ID 먼저 매칭 — 부분일치 오매칭 방지)
+      const candidateIds = Array.from(new Set([
+        ...Object.keys(folderIndex),
+        ...Object.keys(subsByProj),
+      ])).filter(id => id && /^[A-Za-z0-9]{3,}$/.test(id))
+        .sort((a, b) => b.length - a.length);
+
+      console.log(`🔎 매칭 후보 ID: ${candidateIds.length}개 (폴더 ${Object.keys(folderIndex).length} + 제출 ${Object.keys(subsByProj).length})`);
+      if (candidateIds.length === 0) {
+        console.warn('⚠ 후보 ID 가 없습니다. 기존 폴더/제출 데이터가 비어있거나 로컬 폴더 권한이 없을 수 있습니다.');
+      }
+
+      // ── 2단계: PDF 분석 ──
+      status.textContent = '⏳ PDF 분석 중...';
       const loadingTask = pdfjsLib.getDocument({ data: ab.slice(0) });
       const pdf = await loadingTask.promise;
       const pageCount = pdf.numPages;
@@ -358,9 +383,9 @@ const AdminView = {
           const y = it.transform[5];
           const t = (it.str || '');
           if (!t) continue;
-          // 날짜 (YYYY.MM.DD) — 페이지 어디에든
+          // 날짜 (YYYY.MM.DD or YYYY-MM-DD) — 페이지 어디에든
           const tt = t.trim();
-          if (!dateVal && /^\d{4}\.\d{2}\.\d{2}$/.test(tt)) dateVal = tt;
+          if (!dateVal && /^\d{4}[.\-]\d{2}[.\-]\d{2}$/.test(tt)) dateVal = tt;
           // y를 2pt 단위로 묶음
           const yKey = Math.round(y / 2) * 2;
           if (!lineMap[yKey]) lineMap[yKey] = [];
@@ -373,43 +398,57 @@ const AdminView = {
           let s = '';
           let lastX = -Infinity;
           for (const o of arr) {
-            // 좌표 간격이 크면 공백 추가
             if (lastX !== -Infinity && o.x - lastX > 5) s += ' ';
             s += o.str;
-            lastX = o.x + (o.str.length * 5); // 대략적
+            lastX = o.x + (o.str.length * 5);
           }
           return s.trim();
         }).filter(Boolean);
 
-        // 5자리 + 한글 현장명 패턴 — 라인별로 검색
+        const compact = lines.join(' ').replace(/\s+/g, '');
+        const compactUpper = compact.toUpperCase();
+
+        // ── 매칭 1순위: 후보 ID 중 페이지 텍스트에 포함된 것 ──
         let projNum = '', memo = '';
-        const matchPatterns = [
-          /(\d{5})\s*([가-힣][가-힣A-Za-z0-9_\s\(\)\-\.]{1,40})/,
-          /([가-힣][가-힣A-Za-z0-9_\s\(\)\-\.]{1,30})\s*(\d{5})/, // 한글 + 숫자 순서
-        ];
-        for (const line of lines) {
-          for (const pattern of matchPatterns) {
-            const m = line.match(pattern);
-            if (m) {
-              // 패턴에 따라 그룹 위치가 다름
-              if (/^\d/.test(m[1])) { projNum = m[1]; memo = (m[2] || '').trim(); }
-              else { projNum = m[2]; memo = (m[1] || '').trim(); }
-              break;
-            }
+        for (const id of candidateIds) {
+          if (compactUpper.includes(id.toUpperCase())) {
+            projNum = id;
+            // ID 바로 뒤의 짧은 한글 토막을 메모로
+            const idx = compactUpper.indexOf(id.toUpperCase());
+            const after = compact.slice(idx + id.length, idx + id.length + 30);
+            const m = after.match(/[가-힣][가-힣A-Za-z0-9_\(\)\-\.]{0,30}/);
+            if (m) memo = m[0];
+            break;
           }
-          if (projNum) break;
         }
 
-        // fallback: 페이지 전체 텍스트에서 공백 무시하고 5자리 + 한글
+        // ── 매칭 2순위 (fallback): 기존 regex (5자리 숫자 + 한글) ──
         if (!projNum) {
-          const compact = lines.join(' ').replace(/\s+/g, '');
-          const m = compact.match(/(\d{5})([가-힣]{2,20})/);
+          const matchPatterns = [
+            /(\d{4,6})\s*([가-힣][가-힣A-Za-z0-9_\s\(\)\-\.]{1,40})/,
+            /([가-힣][가-힣A-Za-z0-9_\s\(\)\-\.]{1,30})\s*(\d{4,6})/,
+          ];
+          for (const line of lines) {
+            for (const pattern of matchPatterns) {
+              const m = line.match(pattern);
+              if (m) {
+                if (/^\d/.test(m[1])) { projNum = m[1]; memo = (m[2] || '').trim(); }
+                else { projNum = m[2]; memo = (m[1] || '').trim(); }
+                break;
+              }
+            }
+            if (projNum) break;
+          }
+        }
+        if (!projNum) {
+          const m = compact.match(/(\d{4,6})([가-힣]{2,20})/);
           if (m) { projNum = m[1]; memo = m[2]; }
         }
 
         pageInfos.push({
           page: p, projNum, dateVal, memo,
-          fullText: lines.join(' | ').slice(0, 250),
+          fullText: lines.join(' | ').slice(0, 300),
+          compact: compact.slice(0, 200), // _UNKNOWN 진단용
         });
       }
 
@@ -427,7 +466,6 @@ const AdminView = {
       let centralLookup = {};
       if (projNums.length > 0 && Sync.enabled() && cfg.centralProjectSheetUrl) {
         status.textContent = `⏳ 중앙 시트 검증 (${projNums.length}개)...`;
-        // 컬럼: G=프로젝트명(7번열), I=시공사(9번열), H=주소(8번열)
         const r = await Sync.lookupCentralColumns(
           cfg.centralProjectSheetUrl,
           cfg.centralProjectSheetGid,
@@ -437,19 +475,6 @@ const AdminView = {
         );
         if (r.ok) centralLookup = r.map || {};
       }
-
-      // 시공사 제출 데이터와 매칭
-      const submissions = Storage.getSubmissions();
-      const subsByProj = {};
-      submissions.forEach(s => {
-        if (!subsByProj[s.projectId]) subsByProj[s.projectId] = [];
-        subsByProj[s.projectId].push(s);
-      });
-
-      // 로컬 폴더(26년기후부 + 민자사업) 스캔 — 이미 뿌려진 프로젝트 폴더 인덱스 구축
-      status.textContent = '⏳ 로컬 폴더 스캔 중...';
-      const folderIndex = await this._scanExistingProjectFolders(['climate26', 'private']);
-      this._splitFolderIndex = folderIndex;
 
       // 결과 표시
       this._splitGroups = groups;
@@ -525,6 +550,32 @@ const AdminView = {
       const folderMatchCount = Object.keys(groups).filter(k => k !== '_UNKNOWN' && folderIndex[k]).length;
       const verifiedCount = Object.keys(groups).filter(k => k !== '_UNKNOWN' && centralLookup[k]).length;
 
+      // _UNKNOWN 진단 섹션: 왜 못 찾았는지 사용자가 직접 확인
+      const unknownPages = groups._UNKNOWN || [];
+      let diagnosticHtml = '';
+      if (unknownPages.length > 0) {
+        const rows = unknownPages.map(p =>
+          `<tr>
+            <td style="width:50px">p.${p.page}</td>
+            <td style="font-family:monospace;font-size:11px;word-break:break-all">${(p.compact || '').replace(/</g,'&lt;')}</td>
+          </tr>`
+        ).join('');
+        diagnosticHtml = `
+          <details style="margin-top:10px;background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;padding:10px">
+            <summary style="cursor:pointer;font-weight:600;color:#92400e">
+              ⚠ 프로젝트번호 미매칭 ${unknownPages.length}페이지 — 추출 텍스트 확인
+            </summary>
+            <p style="margin:8px 0 6px 0;font-size:12px;color:#92400e">
+              아래는 각 페이지에서 추출된 텍스트입니다. 프로젝트번호가 보이면 해당 ID의 폴더가 설정된 로컬 폴더(26년기후부/민자사업) 에 존재하는지,
+              또는 처리예정 제출 데이터에 있는지 확인하세요. 후보 ID 수: <strong>${candidateIds.length}개</strong>
+            </p>
+            <div style="max-height:260px;overflow:auto;background:white;padding:6px;border-radius:4px">
+              <table class="data-table compact"><tbody>${rows}</tbody></table>
+            </div>
+          </details>
+        `;
+      }
+
       result.innerHTML = `
         <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px;margin-bottom:12px">
           📄 총 <strong>${pageCount}페이지</strong>
@@ -532,8 +583,10 @@ const AdminView = {
           · 중앙시트 검증 <strong>${verifiedCount}건</strong>
           · 기존 폴더 매칭 <strong>${folderMatchCount}건</strong>
           · 자동 분배 가능 <strong>${distributableCount}건</strong>
+          <br><span class="muted" style="font-size:12px">매칭 후보 ID: ${candidateIds.length}개 (폴더 ${Object.keys(folderIndex).length} + 제출 ${Object.keys(subsByProj).length})</span>
         </div>
         ${tbl.join('')}
+        ${diagnosticHtml}
         <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
           <button id="btn-split-confirm" class="primary strong" ${distributableCount === 0 ? 'disabled' : ''}>
             📁 ${distributableCount}건 이체증 폴더 분배 (상태 변경 없음)

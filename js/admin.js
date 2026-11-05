@@ -429,8 +429,15 @@ const AdminView = {
       }
 
       // ── 2단계: PDF 분석 ──
+      // cMapUrl: CID 폰트(한글/한자/숫자)의 유니코드 매핑 테이블.
+      // 설정 없으면 추출 결과가 □ (tofu) 로 깨짐 — 우리은행 이체증이 이 포맷.
       status.textContent = '⏳ PDF 분석 중...';
-      const loadingTask = pdfjsLib.getDocument({ data: ab.slice(0) });
+      const loadingTask = pdfjsLib.getDocument({
+        data: ab.slice(0),
+        cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+        cMapPacked: true,
+        useSystemFonts: true,
+      });
       const pdf = await loadingTask.promise;
       const pageCount = pdf.numPages;
 

@@ -546,9 +546,17 @@ const AdminView = {
         }
         if (!projNum && memoValue) {
           const hit = this._matchByName(memoValue, nameIndex);
+          console.log(`🔎 p.${p} 내부메모="${memoValue}" → ${hit ? `매칭 ID=${hit.id} (${hit.source}/${hit.searchKey})` : '매칭 실패'} · nameIndex 총 ${nameIndex.length}개`);
           if (hit) {
             projNum = hit.id;
             memo = memoValue;
+          } else {
+            // 매칭 실패 시 처음 10개 샘플 로그 — 왜 안맞는지 확인용
+            const sample = nameIndex.slice(0, 10).map(e => `${e.source}:${e.searchKey}`).join(', ');
+            console.log(`   nameIndex 샘플(10): ${sample}`);
+            const needle = this._normalizeName(memoValue);
+            const partialHits = nameIndex.filter(e => e.searchKey.includes(needle.slice(0, 2))).slice(0, 5);
+            if (partialHits.length > 0) console.log(`   부분일치 후보(2자): ${partialHits.map(e => `${e.id}:${e.searchKey}`).join(', ')}`);
           }
         }
 

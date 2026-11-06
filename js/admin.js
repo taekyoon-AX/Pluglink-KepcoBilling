@@ -689,9 +689,13 @@ const AdminView = {
           const tryRematch = (text, pi) => {
             const variants = expandNumVariants(text);
             pi.ocrNums = [...variants].slice(0, 50);
-            // 1순위: ID 직접 매칭
+            // 1순위: ID 직접 매칭 — 매칭 성공 시 납부내역에도 있으면 검증 cell 채움
             for (const id of candidateIds) {
-              if (variants.has(id)) { pi.projNum = id; pi.memo = `OCR_ID(${id})`; return true; }
+              if (variants.has(id)) {
+                pi.projNum = id; pi.memo = `OCR_ID(${id})`;
+                if (paidById[id]) fillFromPaid(id);
+                return true;
+              }
             }
             // 1-추가순위: 납부내역 B열 ID (candidateIds 밖) — 원본 또는 숫자부분 매칭
             for (const v of variants) {

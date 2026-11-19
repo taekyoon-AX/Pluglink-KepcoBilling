@@ -1840,6 +1840,10 @@ const AdminView = {
 
     let recorded = 0, recordFail = 0;
     const targetPids = new Set();
+    const seenProjects = new Set();
+    let projectCount = 0;
+    let driveSaved = 0, driveFailed = 0, localSaved = 0;
+    let driveConfigured = false, localConfigured = false;
 
     // 1단계: 확인완료 처리 (시트 이동)
     for (let i = 0; i < rowNumbers.length; i++) {
@@ -1849,11 +1853,12 @@ const AdminView = {
       try {
         const matchedSub = this._findMatchingSub(row);
         if (matchedSub) {
+          await this._syncRowNotesToSub(row, matchedSub);
           const patch = { scheduledProcessDate: today.toISOString() };
           Storage.updateSubmission(matchedSub.id, patch);
           if (Sync.enabled()) await Sync.updateSubmission(matchedSub.id, patch);
           await this.uploadNotesTxt(matchedSub);
-          await this.recordToProcessingSheet(matchedSub);
+          await this.recordToProcessingSheet(matchedSub, row);
         } else {
           const r = await this._processUnmatchedRow(row);
           if (!r || !r.ok) throw new Error(r && r.error || 'unknown');
@@ -1866,7 +1871,60 @@ const AdminView = {
       }
     }
 
-    // 2단계: Q열 TRUE 일괄 설정
+    // 2단계: 프로젝트별 폴더 저장 (26년기후부/민자사업 등 카테고리별 로컬 폴더로 이동)
+    // category override 를 사업구분별로 1회만 묻고 그 이후는 캐시 재사용
+    const categoryOverrides = {};
+    const promptEnabled = cfg.promptFolderOnConfirm !== false;
+
+    for (let i = 0; i < rowNumbers.length; i++) {
+      const row = pendingMap[rowNumbers[i]];
+      if (!row) continue;
+      const matchedSub = this._findMatchingSub(row);
+      if (!matchedSub) continue;
+      const key = `${matchedSub.contractor}|${matchedSub.projectId}`;
+      if (seenProjects.has(key)) continue;
+      seenProjects.add(key);
+      projectCount++;
+      if (btn) btn.textContent = `⏳ 폴더 저장 ${seenProjects.size}...`;
+
+      // 💡 사업구분 주입 — 모든 copy 경로가 올바른 카테고리로 라우팅되도록
+      if (row.c && !matchedSub.category) matchedSub.category = row.c;
+
+      const guessSub = { ...matchedSub, category: row.c || matchedSub.category };
+      const cat = Utils.detectCategory(guessSub);
+      let override;
+      if (promptEnabled) {
+        if (!(cat in categoryOverrides)) {
+          const o = await this._promptFolderOverride(matchedSub, row);
+          if (o && o.cancel) {
+            categoryOverrides[cat] = { skip: true };
+          } else {
+            categoryOverrides[cat] = o || { category: cat };
+          }
+        }
+        override = categoryOverrides[cat];
+      }
+
+      try {
+        const [dr, lr] = await Promise.all([
+          this.copyToProcessedFolder(matchedSub, override),
+          this.copyToLocalFolder(matchedSub),
+        ]);
+        if (dr && dr.ok) {
+          driveConfigured = true;
+          driveSaved += (dr.results || []).filter(x => x.ok).length;
+          driveFailed += (dr.results || []).filter(x => !x.ok).length;
+        }
+        if (lr && lr.ok) {
+          localConfigured = true;
+          localSaved += lr.saved || 0;
+        }
+      } catch (e) {
+        console.error('일괄 납부완료(폴더 저장) 오류', rowNumbers[i], e);
+      }
+    }
+
+    // 3단계: Q열 TRUE 일괄 설정
     if (btn) btn.textContent = '⏳ Q열 체크 중...';
     await this.loadQStatus();
     const allRowNumbers = [];
@@ -1886,7 +1944,11 @@ const AdminView = {
 
     if (btn) { btn.disabled = false; btn.textContent = origText; }
     await this._refreshDashboardData();
-    alert(`✓ 일괄 납부 완료\n\n시트 기록: ${recorded}건${recordFail ? ` (실패 ${recordFail})` : ''}\nQ열 체크: ${qOk ? targetPids.size + '개 프로젝트' : '실패'}`);
+
+    const saveLines = [];
+    if (localConfigured) saveLines.push(`💻 PC 폴더: ${localSaved}개 저장`);
+    else                 saveLines.push('❌ PC 로컬 폴더 핸들 없음 — 설정 탭에서 재선택 필요');
+    alert(`✓ 일괄 납부 완료\n\n시트 기록: ${recorded}건${recordFail ? ` (실패 ${recordFail})` : ''}\n처리 프로젝트: ${projectCount}개\n${saveLines.join('\n')}\nQ열 체크: ${qOk ? targetPids.size + '개 프로젝트' : '실패'}`);
   },
 
   shortNote(notes) {

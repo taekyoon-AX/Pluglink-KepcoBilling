@@ -333,9 +333,22 @@ const AdminView = {
     if (!window.pdfjsLib) { alert('PDF.js 로드 실패. 새로고침 후 재시도하세요.'); return; }
 
     // 중복 실행 방지 — 버튼 바인딩/섹션 재초기화로 두 번 호출되는 케이스 차단
-    if (this._splitAnalyzing) { console.warn('⚠ 이미 분석 중 — 중복 호출 무시'); return; }
+    if (this._splitAnalyzing) {
+      console.warn('⚠ 이미 분석 중 — 중복 호출 무시. 멈춘 상태로 보이면 Console 에서 AdminView._splitAnalyzing = false 실행 후 재시도.');
+      return;
+    }
     this._splitAnalyzing = true;
-    const _release = () => { this._splitAnalyzing = false; };
+    // Safety: 10분 후에도 끝나지 않으면 flag 자동 해제 — 멈춤 시 재진입 가능하게
+    const autoReleaseTimer = setTimeout(() => {
+      if (this._splitAnalyzing) {
+        console.warn('⚠ 분석 10분 초과 — lock 자동 해제');
+        this._splitAnalyzing = false;
+      }
+    }, 10 * 60 * 1000);
+    const _release = () => {
+      clearTimeout(autoReleaseTimer);
+      this._splitAnalyzing = false;
+    };
 
     status.textContent = '⏳ 준비 중 (폴더 스캔)...';
     result.innerHTML = '';
@@ -1221,29 +1234,53 @@ const AdminView = {
    */
   async _scanExistingProjectFolders(categories) {
     const index = {};
+    const statusEl = document.getElementById('split-status');
+    const withTimeout = (p, ms, label) => Promise.race([
+      p,
+      new Promise((_, rj) => setTimeout(() => rj(new Error(`timeout ${ms}ms: ${label}`)), ms)),
+    ]);
     for (const cat of categories) {
-      const handle = await this.getLocalFolderHandle(cat).catch(() => null);
-      if (!handle) {
-        console.log(`📂 ${Utils.categoryLabel(cat)} 로컬 폴더 핸들 없음 — 스킵`);
+      const catLabel = Utils.categoryLabel(cat);
+      console.log(`📂 ${catLabel}: 핸들 조회 중...`);
+      if (statusEl) statusEl.textContent = `⏳ 폴더 스캔: ${catLabel} 핸들 조회 중...`;
+
+      // 핸들 조회에 10초 timeout — requestPermission 이 user gesture 손실로 pending 될 수 있음
+      let handle;
+      try {
+        handle = await withTimeout(this.getLocalFolderHandle(cat).catch(() => null), 10000, `${catLabel} 핸들`);
+      } catch (e) {
+        console.warn(`⚠ ${catLabel} 핸들 timeout — 설정 탭에서 폴더 재선택 필요`, e);
+        if (statusEl) statusEl.textContent = `⚠ ${catLabel} 폴더 권한 응답 없음 — 스킵`;
         continue;
       }
+      if (!handle) {
+        console.log(`📂 ${catLabel} 로컬 폴더 핸들 없음 — 스킵`);
+        continue;
+      }
+
+      console.log(`📂 ${catLabel}: entries 이터레이션 시작 (폴더: ${handle.name || '?'})`);
+      if (statusEl) statusEl.textContent = `⏳ 폴더 스캔: ${catLabel} 하위 폴더 읽는 중...`;
       try {
         let count = 0;
-        for await (const [name, h] of handle.entries()) {
-          if (h.kind !== 'directory') continue;
-          const m = name.match(/^([^_]+)_/);
-          if (!m) continue;
-          const pid = m[1];
-          if (!index[pid]) {
-            index[pid] = { parent: handle, folderName: name, category: cat };
-            count++;
+        // entries() 이터레이션 전체에 60초 timeout
+        await withTimeout((async () => {
+          for await (const [name, h] of handle.entries()) {
+            if (h.kind !== 'directory') continue;
+            const m = name.match(/^([^_]+)_/);
+            if (!m) continue;
+            const pid = m[1];
+            if (!index[pid]) {
+              index[pid] = { parent: handle, folderName: name, category: cat };
+              count++;
+            }
           }
-        }
-        console.log(`📂 ${Utils.categoryLabel(cat)} 스캔: ${count}개 프로젝트 폴더 발견`);
+        })(), 60000, `${catLabel} entries`);
+        console.log(`📂 ${catLabel} 스캔 완료: ${count}개 프로젝트 폴더`);
       } catch (e) {
-        console.warn(`📂 ${Utils.categoryLabel(cat)} 스캔 실패:`, e);
+        console.warn(`📂 ${catLabel} 스캔 실패/timeout:`, e);
       }
     }
+    if (statusEl) statusEl.textContent = '⏳ 폴더 스캔 완료';
     return index;
   },
 
@@ -3123,7 +3160,12 @@ const AdminView = {
     try {
       const perm = await handle.queryPermission({ mode: 'readwrite' });
       if (perm === 'granted') return handle;
-      const req = await handle.requestPermission({ mode: 'readwrite' });
+      // requestPermission 은 user gesture 가 필요함. 여러 await 거친 후 호출되면
+      // 무한 pending 될 수 있어서 5초 timeout 으로 보호.
+      const req = await Promise.race([
+        handle.requestPermission({ mode: 'readwrite' }),
+        new Promise((_, rj) => setTimeout(() => rj(new Error('requestPermission timeout')), 5000)),
+      ]).catch(e => { console.warn(`🔒 폴더 권한 요청 실패/timeout:`, e.message); return 'denied'; });
       return req === 'granted' ? handle : null;
     } catch (e) {
       return null;

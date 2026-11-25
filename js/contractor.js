@@ -451,6 +451,7 @@ const ContractorView = {
       alert(msg);
       return;
     }
+    console.log(`📤 검증 통과: ${toSubmit.length}건 제출 대상`);
 
     // 기납부 중복 검사 — 본인 시공사의 제출 이력에 같은 프로젝트ID 있으면 경고
     const myHistory = Storage.getSubmissions(auth.id);
@@ -508,79 +509,98 @@ const ContractorView = {
     });
 
     const msgEl = document.getElementById('submit-msg');
-    for (let i = 0; i < toSubmit.length; i++) {
-      const item = toSubmit[i];
-      msgEl.innerHTML = `<span class="info">⏳ 업로드 중... (${i + 1}/${toSubmit.length})</span>`;
+    try {
+      for (let i = 0; i < toSubmit.length; i++) {
+        const item = toSubmit[i];
+        msgEl.innerHTML = `<span class="info">⏳ 업로드 중... (${i + 1}/${toSubmit.length})</span>`;
+        console.log(`📤 [${i + 1}/${toSubmit.length}] 제출 시작: ${item.data.projectId} / ${item.data.location || '단일거점'}`);
 
-      for (const [docType, file] of Object.entries(item.files)) {
-        if (!file) continue;
-        const fileId = Utils.uuid();
-        await FileDB.save(fileId, file);
-        item.data.files[docType] = fileId;
+        for (const [docType, file] of Object.entries(item.files)) {
+          if (!file) continue;
+          const fileId = Utils.uuid();
+          console.log(`  📎 ${docType}: FileDB 저장 중...`);
+          await FileDB.save(fileId, file);
+          item.data.files[docType] = fileId;
+          console.log(`  📎 ${docType}: FileDB 저장 완료 (${fileId.slice(0, 8)})`);
 
-        // 임시 저장 폴더에 1차 저장 (사업구분 무관, 평평)
-        if (stagingHandle && AdminView.writeToStagingFolder) {
-          const sr = await AdminView.writeToStagingFolder(item.data, docType, file);
-          if (sr.ok) {
-            stagingCount++;
-            item.data.files[docType + 'StagingPath'] = `${sr.category}/${sr.folder}/${sr.name}`;
+          if (stagingHandle && AdminView.writeToStagingFolder) {
+            console.log(`  📁 ${docType}: staging 폴더 쓰기 중...`);
+            const sr = await AdminView.writeToStagingFolder(item.data, docType, file);
+            if (sr.ok) {
+              stagingCount++;
+              item.data.files[docType + 'StagingPath'] = `${sr.category}/${sr.folder}/${sr.name}`;
+              console.log(`  📁 ${docType}: staging 완료 (${sr.category}/${sr.folder})`);
+            } else {
+              console.warn(`  📁 ${docType}: staging 실패 — ${sr.error}`);
+            }
+          }
+
+          if (Sync.enabled() && !stagingSkipDrive) {
+            console.log(`  ☁️ ${docType}: Drive 업로드 중...`);
+            const up = await Sync.uploadFile(file, item.data, docType);
+            if (up.ok) {
+              item.data.files[docType] = up.fileId;
+              item.data.files[docType + 'Url'] = up.url;
+              console.log(`  ☁️ ${docType}: Drive 업로드 완료`);
+            } else {
+              console.warn(`  ☁️ ${docType}: Drive 실패 — ${up.error}`);
+            }
           }
         }
+        console.log(`  💾 Storage.addSubmission 호출`);
+        Storage.addSubmission(item.data);
+        if (Sync.enabled()) {
+          console.log(`  🔄 Sync.pushSubmission 호출`);
+          await Sync.pushSubmission(item.data);
+        }
 
-        // Drive 업로드 — 임시 저장 활성 && 토글 ON 이면 생략
-        if (Sync.enabled() && !stagingSkipDrive) {
-          const up = await Sync.uploadFile(file, item.data, docType);
-          if (up.ok) {
-            item.data.files[docType] = up.fileId;
-            item.data.files[docType + 'Url'] = up.url;
+        if (Sync.enabled()) {
+          try {
+            const d = item.data;
+            const parsed = Utils.parseProjectName(d.projectName || '');
+            const cleanName = parsed.name || d.projectName || '';
+            const locSuffix = d.location ? `-${d.location}` : '';
+            const pendingRow = {
+              a: auth.name || auth.id,
+              b: d.projectId,
+              e: cleanName + locSuffix,
+              f: d.capacity ? `${d.capacity} kW` : '',
+              g: Number(d.baseFee) || 0,
+              j: d.customerNumber || '',
+              k: d.customerBank || '',
+              l: d.customerAccount || '',
+              r: d.notes || '',
+            };
+            console.log(`  📋 Sync.appendPendingRow 호출:`, pendingRow);
+            const pr = await Sync.appendPendingRow(pendingRow);
+            if (!pr.ok) console.warn('  📋 납부대기 추가 실패:', pr.error);
+            else console.log(`  ✓ 납부대기 ${pr.rowNumber}행 추가 (${d.projectId})`);
+          } catch (e) {
+            console.warn('  📋 납부대기 추가 예외:', e);
           }
         }
+        console.log(`✅ [${i + 1}/${toSubmit.length}] 제출 완료`);
       }
-      Storage.addSubmission(item.data);
-      if (Sync.enabled()) await Sync.pushSubmission(item.data);
 
-      // 납부대기 시트에도 행 추가 (best-effort)
-      if (Sync.enabled()) {
-        try {
-          const d = item.data;
-          // 현장명: admin recordToProcessingSheet 와 동일한 포맷 (차수 제외, 거점만 suffix)
-          // → 차수까지 포함하면 admin 측 매칭 실패로 납부대기 삭제가 안 되므로 동일하게 맞춤
-          const parsed = Utils.parseProjectName(d.projectName || '');
-          const cleanName = parsed.name || d.projectName || '';
-          const locSuffix = d.location ? `-${d.location}` : '';
-          const pendingRow = {
-            a: auth.name || auth.id,            // A = 시공사 (서버에서 강제 덮어씀)
-            b: d.projectId,                      // B = 프로젝트ID
-            e: cleanName + locSuffix,            // E = 현장명
-            f: d.capacity ? `${d.capacity} kW` : '', // F = 용량
-            g: Number(d.baseFee) || 0,           // G = 표준시설부담금
-            j: d.customerNumber || '',           // J = 고객번호
-            k: d.customerBank || '',             // K = 은행
-            l: d.customerAccount || '',          // L = 고객지정계좌
-            r: d.notes || '',                    // R = 비고
-          };
-          const pr = await Sync.appendPendingRow(pendingRow);
-          if (!pr.ok) console.warn('납부대기 추가 실패:', pr.error);
-          else console.log(`✓ 납부대기 ${pr.rowNumber}행 추가 (${d.projectId})`);
-        } catch (e) {
-          console.warn('납부대기 추가 예외:', e);
-        }
-      }
+      const stagingNote = stagingHandle
+        ? ` <span class="muted">· 📝 임시폴더에 ${stagingCount}개 파일 저장${stagingSkipDrive ? ' (Drive 업로드 생략 — 확인완료 시 이관)' : ''}</span>`
+        : '';
+      msgEl.innerHTML =
+        `<span class="info">✓ ${toSubmit.length}건이 제출되었습니다. 처리예정일: ${Utils.describeDate(toSubmit[0].data.scheduledProcessDate)}</span>${stagingNote}`;
+
+      this.projectBlockCount = 0;
+      this.locRowCount = 0;
+      this.pendingFiles = {};
+      document.getElementById('submit-rows').innerHTML = '';
+      this.addProjectBlock();
+      this.loadPaymentHistory();
+      console.log('🎉 일괄제출 전체 완료');
+    } catch (submitErr) {
+      console.error('🔥 일괄제출 중 예외:', submitErr);
+      const errMsg = `❌ 제출 중 오류가 발생했습니다.\n\n${submitErr.message || submitErr}`;
+      msgEl.innerHTML = `<span class="error">${errMsg.replace(/\n/g, '<br>')}</span>`;
+      alert(errMsg);
     }
-
-    const stagingNote = stagingHandle
-      ? ` <span class="muted">· 📝 임시폴더에 ${stagingCount}개 파일 저장${stagingSkipDrive ? ' (Drive 업로드 생략 — 확인완료 시 이관)' : ''}</span>`
-      : '';
-    msgEl.innerHTML =
-      `<span class="info">✓ ${toSubmit.length}건이 제출되었습니다. 처리예정일: ${Utils.describeDate(toSubmit[0].data.scheduledProcessDate)}</span>${stagingNote}`;
-
-    // 폼 초기화
-    this.projectBlockCount = 0;
-    this.locRowCount = 0;
-    this.pendingFiles = {};
-    document.getElementById('submit-rows').innerHTML = '';
-    this.addProjectBlock();
-    this.loadPaymentHistory();
   },
 
   // ================== Excel 일괄 업로드 ==================

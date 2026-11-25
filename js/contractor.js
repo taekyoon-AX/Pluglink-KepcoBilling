@@ -452,64 +452,70 @@ const ContractorView = {
       return;
     }
     console.log(`📤 검증 통과: ${toSubmit.length}건 제출 대상`);
-
-    // 기납부 중복 검사 — 본인 시공사의 제출 이력에 같은 프로젝트ID 있으면 경고
-    const myHistory = Storage.getSubmissions(auth.id);
-    const dupWarnings = [];
-    toSubmit.forEach((t, i) => {
-      const d = t.data;
-      const dupes = myHistory.filter(h => h.projectId === d.projectId);
-      if (dupes.length > 0) {
-        const dupDates = dupes.map(h => Utils.toYMD(new Date(h.submittedAt))).join(', ');
-        dupWarnings.push(`#${i + 1} 프로젝트 ${d.projectId} (이전 제출일: ${dupDates})`);
-      }
-    });
-    if (dupWarnings.length > 0) {
-      const msg = `⚠️ 기납부된 건이 있습니다. 확인 부탁드립니다.\n\n${dupWarnings.join('\n')}\n\n그래도 제출하시겠습니까?`;
-      if (!confirm(msg)) {
-        document.getElementById('submit-msg').innerHTML =
-          `<span class="error">제출이 취소되었습니다.</span>`;
-        return;
-      }
-    }
-
-    // 같은 프로젝트ID 다중 거점 → 자동 1거점/2거점 부여 (사용자가 거점명 입력하면 그대로)
-    const autoLocations = Utils.assignAutoLocations(toSubmit.map(t => t.data));
-    toSubmit.forEach((t, i) => { t.data.location = autoLocations[i]; });
-
-    // 임시 저장 로컬 폴더 활성 여부 — 관리자(또는 뷰잉-애즈) 상태에서만 의미 있음
-    const stagingEnabled = this.ctx || (Auth.current() && Auth.current().role === 'admin');
-    const stagingSkipDrive = stagingEnabled && cfg.stagingSkipDriveAtReview !== false;
-    let stagingHandle = null;
-    if (stagingEnabled && typeof AdminView !== 'undefined' && AdminView.getLocalFolderHandle) {
-      stagingHandle = await AdminView.getLocalFolderHandle('staging').catch(() => null);
-    }
-    let stagingCount = 0;
-
-    // 💡 사업구분 일괄 조회 — 중앙시트 G열(기본) 또는 사용자 지정
-    //    각 item.data.category 에 주입해 staging/drive 카테고리 라우팅 정확하게
-    let categoryMap = {};
-    if (Sync.enabled() && cfg.centralProjectSheetUrl) {
-      const uniqueIds = [...new Set(toSubmit.map(t => t.data.projectId).filter(Boolean))];
-      if (uniqueIds.length > 0) {
-        try {
-          const r = await Sync.lookupCentralColumns(
-            cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
-            uniqueIds, ['G'],
-          );
-          if (r.ok && r.map) {
-            Object.keys(r.map).forEach(pid => { categoryMap[pid] = r.map[pid].G || ''; });
-          }
-        } catch (e) { console.warn('사업구분 조회 실패:', e); }
-      }
-    }
-    toSubmit.forEach(t => {
-      const cat = categoryMap[t.data.projectId];
-      if (cat) t.data.category = cat;
-    });
-
     const msgEl = document.getElementById('submit-msg');
+
     try {
+      console.log('📤 1단계: 기납부 중복 검사');
+      const myHistory = Storage.getSubmissions(auth.id);
+      const dupWarnings = [];
+      toSubmit.forEach((t, i) => {
+        const d = t.data;
+        const dupes = myHistory.filter(h => h.projectId === d.projectId);
+        if (dupes.length > 0) {
+          const dupDates = dupes.map(h => Utils.toYMD(new Date(h.submittedAt))).join(', ');
+          dupWarnings.push(`#${i + 1} 프로젝트 ${d.projectId} (이전 제출일: ${dupDates})`);
+        }
+      });
+      if (dupWarnings.length > 0) {
+        console.log(`📤 중복 ${dupWarnings.length}건 감지 — confirm 다이얼로그 표시`);
+        const msg = `⚠️ 기납부된 건이 있습니다. 확인 부탁드립니다.\n\n${dupWarnings.join('\n')}\n\n그래도 제출하시겠습니까?`;
+        if (!confirm(msg)) {
+          console.log('📤 사용자가 취소함');
+          msgEl.innerHTML = `<span class="error">제출이 취소되었습니다.</span>`;
+          return;
+        }
+      }
+
+      console.log('📤 2단계: autoLocations 할당');
+      const autoLocations = Utils.assignAutoLocations(toSubmit.map(t => t.data));
+      toSubmit.forEach((t, i) => { t.data.location = autoLocations[i]; });
+
+      console.log('📤 3단계: staging 폴더 핸들 조회');
+      const stagingEnabled = this.ctx || (Auth.current() && Auth.current().role === 'admin');
+      const stagingSkipDrive = stagingEnabled && cfg.stagingSkipDriveAtReview !== false;
+      let stagingHandle = null;
+      if (stagingEnabled && typeof AdminView !== 'undefined' && AdminView.getLocalFolderHandle) {
+        stagingHandle = await AdminView.getLocalFolderHandle('staging').catch((e) => {
+          console.warn('📤 staging handle 조회 실패:', e);
+          return null;
+        });
+      }
+      console.log(`📤 stagingEnabled=${stagingEnabled}, stagingSkipDrive=${stagingSkipDrive}, stagingHandle=${stagingHandle ? '✓' : '없음'}`);
+      let stagingCount = 0;
+
+      console.log('📤 4단계: 사업구분 일괄 조회 (중앙시트 G열)');
+      let categoryMap = {};
+      if (Sync.enabled() && cfg.centralProjectSheetUrl) {
+        const uniqueIds = [...new Set(toSubmit.map(t => t.data.projectId).filter(Boolean))];
+        if (uniqueIds.length > 0) {
+          try {
+            const r = await Sync.lookupCentralColumns(
+              cfg.centralProjectSheetUrl, cfg.centralProjectSheetGid, cfg.centralProjectSheetName,
+              uniqueIds, ['G'],
+            );
+            if (r.ok && r.map) {
+              Object.keys(r.map).forEach(pid => { categoryMap[pid] = r.map[pid].G || ''; });
+            }
+            console.log(`📤 중앙시트 매칭: ${Object.keys(categoryMap).length}개`);
+          } catch (e) { console.warn('사업구분 조회 실패:', e); }
+        }
+      }
+      toSubmit.forEach(t => {
+        const cat = categoryMap[t.data.projectId];
+        if (cat) t.data.category = cat;
+      });
+
+      console.log('📤 5단계: 업로드 루프 시작');
       for (let i = 0; i < toSubmit.length; i++) {
         const item = toSubmit[i];
         msgEl.innerHTML = `<span class="info">⏳ 업로드 중... (${i + 1}/${toSubmit.length})</span>`;

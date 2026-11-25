@@ -376,11 +376,24 @@ const ContractorView = {
     const errors = [];
     const toSubmit = [];
 
+    console.log(`📤 일괄제출 시작 — 블록 ${blocks.length}개, pendingFiles 키:`, Object.keys(this.pendingFiles || {}));
+    if (blocks.length === 0) {
+      alert('제출할 프로젝트 블록이 없습니다.\n"➕ 프로젝트 추가" 버튼으로 블록을 추가하세요.');
+      return;
+    }
+
     blocks.forEach((block, bIdx) => {
       const blockId = block.dataset.blockId;
       const projectId = block.querySelector('.f-projectId').value.trim();
       const projectName = block.querySelector('.f-projectName').value.trim();
-      const applicationReceipt = this.pendingFiles[blockId].applicationReceipt;
+      // pendingFiles[blockId] 가 undefined 인 경우 방어 (블록 재렌더 등으로 유실 케이스)
+      const pfBlock = this.pendingFiles[blockId];
+      if (!pfBlock) {
+        console.warn(`⚠ 블록 #${bIdx + 1} (${blockId}) pendingFiles 누락 — 접수증/고지서 상태 유실`);
+        errors.push(`프로젝트 #${bIdx + 1}: 파일 상태 유실 — "➕ 프로젝트 추가" 로 블록 다시 만들거나 새로고침 필요`);
+        return;
+      }
+      const applicationReceipt = pfBlock.applicationReceipt;
 
       const locRows = block.querySelectorAll('.loc-row');
       locRows.forEach((row, lIdx) => {
@@ -392,7 +405,8 @@ const ContractorView = {
         const customerAccount = row.querySelector('.f-customerAccount').value.trim();
         const baseFee = Utils.parseMoney(row.querySelector('.f-baseFee').value);
         const notes = row.querySelector('.f-notes').value.trim();
-        const feeNotice = this.pendingFiles[blockId].locations[locId].feeNotice;
+        const pfLoc = pfBlock.locations[locId];
+        const feeNotice = pfLoc ? pfLoc.feeNotice : null;
 
         const rowErrs = [];
         if (!projectId) rowErrs.push('프로젝트 ID');
@@ -430,8 +444,11 @@ const ContractorView = {
     });
 
     if (errors.length > 0) {
+      console.warn('📤 일괄제출 실패 — 필수값 누락:', errors);
+      const msg = `❌ 제출 실패 — 필수값 누락 ${errors.length}건\n\n${errors.join('\n')}`;
       document.getElementById('submit-msg').innerHTML =
-        `<span class="error">필수값 누락:<br>${errors.join('<br>')}</span>`;
+        `<span class="error">${msg.replace(/\n/g, '<br>')}</span>`;
+      alert(msg);
       return;
     }
 

@@ -485,13 +485,21 @@ const ContractorView = {
       const stagingSkipDrive = stagingEnabled && cfg.stagingSkipDriveAtReview !== false;
       let stagingHandle = null;
       if (stagingEnabled && typeof AdminView !== 'undefined' && AdminView.getLocalFolderHandle) {
-        stagingHandle = await AdminView.getLocalFolderHandle('staging').catch((e) => {
-          console.warn('📤 staging handle 조회 실패:', e);
-          return null;
-        });
+        // 전체 조회에 3초 외부 timeout — 내부 requestPermission 이 user gesture 손실로
+        // 멈추는 케이스 방어. staging 없어도 제출 진행 가능 (Drive 로 바로 저장)
+        stagingHandle = await Promise.race([
+          AdminView.getLocalFolderHandle('staging').catch(() => null),
+          new Promise(r => setTimeout(() => { console.warn('📤 staging 핸들 3초 timeout — 스킵'); r(null); }, 3000)),
+        ]);
       }
       console.log(`📤 stagingEnabled=${stagingEnabled}, stagingSkipDrive=${stagingSkipDrive}, stagingHandle=${stagingHandle ? '✓' : '없음'}`);
       let stagingCount = 0;
+
+      // staging 없는 상태로 skipDrive 가 true 면 파일이 어디에도 안 저장됨 — 강제로 Drive 업로드 복구
+      const effectiveSkipDrive = stagingHandle ? stagingSkipDrive : false;
+      if (stagingSkipDrive && !stagingHandle) {
+        console.warn('📤 staging 핸들 없음 — Drive 업로드로 fallback');
+      }
 
       console.log('📤 4단계: 사업구분 일괄 조회 (중앙시트 G열)');
       let categoryMap = {};
@@ -541,7 +549,7 @@ const ContractorView = {
             }
           }
 
-          if (Sync.enabled() && !stagingSkipDrive) {
+          if (Sync.enabled() && !effectiveSkipDrive) {
             console.log(`  ☁️ ${docType}: Drive 업로드 중...`);
             const up = await Sync.uploadFile(file, item.data, docType);
             if (up.ok) {
@@ -589,7 +597,7 @@ const ContractorView = {
       }
 
       const stagingNote = stagingHandle
-        ? ` <span class="muted">· 📝 임시폴더에 ${stagingCount}개 파일 저장${stagingSkipDrive ? ' (Drive 업로드 생략 — 확인완료 시 이관)' : ''}</span>`
+        ? ` <span class="muted">· 📝 임시폴더에 ${stagingCount}개 파일 저장${effectiveSkipDrive ? ' (Drive 업로드 생략 — 확인완료 시 이관)' : ''}</span>`
         : '';
       msgEl.innerHTML =
         `<span class="info">✓ ${toSubmit.length}건이 제출되었습니다. 처리예정일: ${Utils.describeDate(toSubmit[0].data.scheduledProcessDate)}</span>${stagingNote}`;

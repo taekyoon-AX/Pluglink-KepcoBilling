@@ -171,6 +171,15 @@ const ContractorView = {
           <span>프로젝트명 (자동)</span>
           <input class="f-projectName" readonly placeholder="프로젝트 ID 입력 시 자동 입력" />
         </label>
+        <label>
+          <span>저장 폴더 (사업구분)</span>
+          <select class="f-category">
+            <option value="">자동 (중앙시트 매칭)</option>
+            <option value="env25">📁 25년환경부</option>
+            <option value="climate26">📁 26년기후부</option>
+            <option value="private">📁 민자사업</option>
+          </select>
+        </label>
         <label style="grid-column: span 2;">
           <span class="req">전기사용신청접수증 (프로젝트 공통)</span>
           <label class="file-input-wrap" data-target="applicationReceipt">
@@ -217,6 +226,10 @@ const ContractorView = {
       }
       if (prefill.projectName) {
         block.querySelector('.f-projectName').value = prefill.projectName;
+      }
+      if (prefill.category) {
+        const catSel = block.querySelector('.f-category');
+        if (catSel) catSel.value = prefill.category;
       }
     }
 
@@ -386,6 +399,8 @@ const ContractorView = {
       const blockId = block.dataset.blockId;
       const projectId = block.querySelector('.f-projectId').value.trim();
       const projectName = block.querySelector('.f-projectName').value.trim();
+      const categorySelect = block.querySelector('.f-category');
+      const categoryManualCode = categorySelect ? categorySelect.value : ''; // '', 'env25', 'climate26', 'private'
       // pendingFiles[blockId] 가 undefined 인 경우 방어 (블록 재렌더 등으로 유실 케이스)
       const pfBlock = this.pendingFiles[blockId];
       if (!pfBlock) {
@@ -435,6 +450,10 @@ const ContractorView = {
               baseFee,
               notes,
               scheduledProcessDate: Utils.calcScheduledDate(new Date(), cfg).toISOString(),
+              // 사용자가 수동 선택했으면 라벨 문자열(detectCategory 와 호환) 로 저장
+              // 이 값이 있으면 중앙시트 매칭보다 우선 적용됨
+              category: categoryManualCode ? Utils.categoryLabel(categoryManualCode) : '',
+              _categoryManual: !!categoryManualCode,
               files: {},
             },
             files: { applicationReceipt, feeNotice },
@@ -519,8 +538,14 @@ const ContractorView = {
         }
       }
       toSubmit.forEach(t => {
-        const cat = categoryMap[t.data.projectId];
-        if (cat) t.data.category = cat;
+        // 수동 선택이 있으면 그대로 유지, 없을 때만 중앙시트 매칭값 적용
+        if (t.data._categoryManual) {
+          console.log(`📤 ${t.data.projectId}: 수동 폴더 선택 → ${t.data.category}`);
+        } else {
+          const cat = categoryMap[t.data.projectId];
+          if (cat) t.data.category = cat;
+        }
+        delete t.data._categoryManual; // DB 에는 저장 안함
       });
 
       console.log('📤 5단계: 업로드 루프 시작');
